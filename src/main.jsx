@@ -1,223 +1,310 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Clapperboard,
   Download,
   Film,
-  Gauge,
+  ImagePlus,
   Loader2,
-  Pause,
   Play,
   RefreshCw,
-  Settings2,
   Sparkles,
+  Trash2,
   Wand2,
 } from 'lucide-react';
 import './styles.css';
 
-const aspectRatios = ['9:16', '16:9', '1:1'];
-const durations = ['8 秒', '15 秒', '30 秒'];
+const aspectRatios = ['9:16', '16:9', '1:1', '4:3', '3:4'];
+const durations = [5, 8, 15];
 const styles = ['写实广告', '电影感', '产品展示', '动画短片'];
+const POLL_INTERVAL = 15000;
 
 function createStoryboard(prompt, ratio, duration, style) {
-  const cleanPrompt = prompt.trim();
-  const source = cleanPrompt || '一杯冰咖啡在城市天台上被阳光照亮，镜头缓慢推进';
-  const fragments = source
-    .replace(/[，。,.]/g, '|')
-    .split('|')
-    .map((item) => item.trim())
-    .filter(Boolean);
-
+  const source = prompt.trim() || '等待提示词';
+  const fragments = source.replace(/[，。,.]/g, '|').split('|').map((item) => item.trim()).filter(Boolean);
   const beats = [
     fragments[0] || source,
     fragments[1] || '主体进入画面，环境细节逐渐清晰',
     fragments[2] || '镜头切到特写，突出质感、动作和情绪',
-    fragments[3] || '收束到完整画面，保留品牌或主题记忆点',
+    fragments[3] || '收束到完整画面，保留主题记忆点',
   ];
 
   return beats.map((beat, index) => ({
     id: index + 1,
-    time: `${String(index * 3).padStart(2, '0')}s`,
+    time: `${String(Math.round(index * duration / 4)).padStart(2, '0')}s`,
     shot: beat,
     camera: ['慢速推进', '横向跟拍', '微距特写', '定格收束'][index],
-    meta: `${style} / ${ratio} / ${duration}`,
+    meta: `${style} / ${ratio} / ${duration} 秒`,
   }));
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('参考图读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function apiRequest(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '请求失败，请稍后重试');
+  return data;
+}
+
+function progressFor(status) {
+  if (status === 'PENDING') return 12;
+  if (status === 'RUNNING') return 58;
+  if (status === 'SUCCEEDED') return 100;
+  return 0;
 }
 
 function App() {
   const [prompt, setPrompt] = useState('');
   const [ratio, setRatio] = useState('9:16');
-  const [duration, setDuration] = useState('15 秒');
+  const [duration, setDuration] = useState(5);
   const [style, setStyle] = useState('电影感');
-  const [quality, setQuality] = useState(72);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [resolution, setResolution] = useState('720P');
+  const [watermark, setWatermark] = useState(false);
+  const [images, setImages] = useState([]);
+  const [taskStatus, setTaskStatus] = useState('IDLE');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [error, setError] = useState('');
+  const videoRef = useRef(null);
+  const activeTaskRef = useRef(0);
 
   const storyboard = useMemo(
     () => createStoryboard(prompt, ratio, duration, style),
     [prompt, ratio, duration, style],
   );
+  const isGenerating = taskStatus === 'PENDING' || taskStatus === 'RUNNING';
+  const progress = progressFor(taskStatus);
+  const canGenerate = prompt.trim().length > 0 && images.length > 0 && !isGenerating;
 
-  const canGenerate = prompt.trim().length > 0 && !isGenerating;
+  async function addImages(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
 
-  function generateVideo() {
-    if (!canGenerate) return;
-    setIsGenerating(true);
-    setProgress(0);
+    const available = 9 - images.length;
+    const selected = files.slice(0, available);
+    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 20 * 1024 * 1024);
+    if (invalid) {
+      setError('参考图需为 JPG、PNG 或 WEBP，单张不超过 20MB');
+      return;
+    }
 
-    const timer = window.setInterval(() => {
-      setProgress((current) => {
-        if (current >= 100) {
-          window.clearInterval(timer);
-          setIsGenerating(false);
-          setIsPlaying(true);
-          return 100;
-        }
-        return Math.min(current + 8, 100);
+    try {
+      const encoded = await Promise.all(selected.map(fileToDataUrl));
+      setImages((current) => [...current, ...encoded]);
+      setError(files.length > available ? '最多保留前 9 张参考图' : '');
+    } catch (readError) {
+      setError(readError.message);
+    }
+  }
+
+  async function pollTask(taskId, taskToken) {
+    const data = await apiRequest(`/api/videos/${taskId}`);
+    if (activeTaskRef.current !== taskToken) return;
+    setTaskStatus(data.status);
+
+    if (data.status === 'SUCCEEDED' && data.videoUrl) {
+      setVideoUrl(data.videoUrl);
+      return;
+    }
+    if (data.terminal) throw new Error(data.error || '视频任务未能完成');
+
+    window.setTimeout(() => {
+      pollTask(taskId, taskToken).catch((pollError) => {
+        if (activeTaskRef.current !== taskToken) return;
+        setTaskStatus('FAILED');
+        setError(pollError.message);
       });
-    }, 180);
+    }, POLL_INTERVAL);
+  }
+
+  async function generateVideo() {
+    if (!canGenerate) return;
+    setError('');
+    setVideoUrl('');
+    setTaskStatus('PENDING');
+    const taskToken = activeTaskRef.current + 1;
+    activeTaskRef.current = taskToken;
+
+    try {
+      const data = await apiRequest('/api/videos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `${prompt.trim()}。视觉风格：${style}。参考图按上传顺序对应 [Image 1]、[Image 2]。`,
+          images,
+          ratio,
+          duration,
+          resolution,
+          watermark,
+        }),
+      });
+      if (activeTaskRef.current !== taskToken) return;
+      setTaskStatus(data.status);
+      await pollTask(data.taskId, taskToken);
+    } catch (requestError) {
+      if (activeTaskRef.current !== taskToken) return;
+      setTaskStatus('FAILED');
+      setError(requestError.message);
+    }
   }
 
   function reset() {
+    activeTaskRef.current += 1;
     setPrompt('');
-    setProgress(0);
-    setIsGenerating(false);
-    setIsPlaying(true);
+    setImages([]);
+    setVideoUrl('');
+    setError('');
+    setTaskStatus('IDLE');
   }
 
-  const status = isGenerating ? '生成中' : progress === 100 ? '已完成' : '待生成';
+  function togglePlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) video.play();
+    else video.pause();
+  }
+
+  const statusLabels = {
+    IDLE: '待生成',
+    PENDING: '排队中',
+    RUNNING: '生成中',
+    SUCCEEDED: '已完成',
+    FAILED: '生成失败',
+  };
 
   return (
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Prompt Video Studio</p>
-          <h1>输入提示词，生成短视频</h1>
+          <p className="eyebrow">HAPPYHORSE 1.1 / R2V</p>
+          <h1>参考图驱动的视频生成台</h1>
         </div>
-        <div className="status-strip" aria-label="任务状态">
-          <span>{status}</span>
+        <div className={`status-strip ${taskStatus === 'FAILED' ? 'error' : ''}`} aria-live="polite">
+          <span>{statusLabels[taskStatus] || taskStatus}</span>
           <strong>{String(progress).padStart(3, '0')}%</strong>
         </div>
       </section>
 
       <section className="workspace">
         <aside className="control-panel">
-          <div className="panel-heading">
-            <Wand2 size={18} />
-            <h2>提示词</h2>
-          </div>
+          <div className="panel-heading"><Wand2 size={18} /><h2>生成指令</h2></div>
 
           <label className="field">
             <span>视频描述</span>
             <textarea
               value={prompt}
+              maxLength={2500}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="例如：一款银色智能手表在雨夜街头旋转，屏幕亮起健康数据，最后出现产品正面特写"
+              placeholder="例如：[Image 1] 中的银色手表在雨夜街头旋转，镜头推进至屏幕特写"
             />
           </label>
+
+          <div className="reference-field">
+            <div className="field-label"><span>参考图</span><strong>{images.length}/9</strong></div>
+            <div className="reference-grid">
+              {images.map((source, index) => (
+                <div className="reference-item" key={`${source.slice(-20)}-${index}`}>
+                  <img src={source} alt={`参考图 ${index + 1}`} />
+                  <span>[Image {index + 1}]</span>
+                  <button type="button" onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`删除参考图 ${index + 1}`}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              {images.length < 9 && (
+                <label className="upload-tile" aria-label="添加参考图">
+                  <ImagePlus size={22} />
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addImages} />
+                </label>
+              )}
+            </div>
+          </div>
 
           <div className="settings-grid">
             <label className="field">
               <span>比例</span>
               <select value={ratio} onChange={(event) => setRatio(event.target.value)}>
-                {aspectRatios.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
+                {aspectRatios.map((item) => <option key={item}>{item}</option>)}
               </select>
             </label>
-
             <label className="field">
               <span>时长</span>
-              <select value={duration} onChange={(event) => setDuration(event.target.value)}>
-                {durations.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
+              <select value={duration} onChange={(event) => setDuration(Number(event.target.value))}>
+                {durations.map((item) => <option key={item} value={item}>{item} 秒</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>清晰度</span>
+              <select value={resolution} onChange={(event) => setResolution(event.target.value)}>
+                <option>720P</option><option>1080P</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>风格</span>
+              <select value={style} onChange={(event) => setStyle(event.target.value)}>
+                {styles.map((item) => <option key={item}>{item}</option>)}
               </select>
             </label>
           </div>
 
-          <label className="field">
-            <span>风格</span>
-            <select value={style} onChange={(event) => setStyle(event.target.value)}>
-              {styles.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </select>
+          <label className="toggle-field">
+            <input type="checkbox" checked={watermark} onChange={(event) => setWatermark(event.target.checked)} />
+            <span>添加 Happy Horse 水印</span>
           </label>
 
-          <label className="range-field">
-            <span>
-              <Gauge size={16} />
-              画面细节
-            </span>
-            <input
-              type="range"
-              min="20"
-              max="100"
-              value={quality}
-              onChange={(event) => setQuality(Number(event.target.value))}
-            />
-            <strong>{quality}</strong>
-          </label>
+          {error && <p className="error-message" role="alert">{error}</p>}
 
           <div className="action-row">
             <button className="primary-action" onClick={generateVideo} disabled={!canGenerate}>
               {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
-              生成视频
+              {isGenerating ? '正在生成' : '生成视频'}
             </button>
-            <button className="icon-action" onClick={reset} aria-label="重置">
-              <RefreshCw size={18} />
-            </button>
+            <button className="icon-action" onClick={reset} aria-label="重置"><RefreshCw size={18} /></button>
           </div>
         </aside>
 
         <section className="preview-panel">
           <div className="preview-toolbar">
-            <div className="panel-heading">
-              <Film size={18} />
-              <h2>预览</h2>
-            </div>
+            <div className="panel-heading"><Film size={18} /><h2>生成结果</h2></div>
             <div className="toolbar-actions">
-              <button className="icon-action" onClick={() => setIsPlaying((value) => !value)} aria-label={isPlaying ? '暂停' : '播放'}>
-                {isPlaying ? <Pause size={18} /> : <Play size={18} />}
-              </button>
-              <button className="icon-action" aria-label="下载">
-                <Download size={18} />
-              </button>
+              <button className="icon-action" onClick={togglePlayback} disabled={!videoUrl} aria-label="播放或暂停"><Play size={18} /></button>
+              <a className={`icon-action ${!videoUrl ? 'disabled' : ''}`} href={videoUrl || undefined} target="_blank" rel="noreferrer" aria-label="下载视频"><Download size={18} /></a>
             </div>
           </div>
 
-          <div className={`video-frame ${isPlaying ? 'playing' : ''}`}>
-            <div className="scan-layer" />
-            <div className="frame-number">FRAME {String(Math.max(progress, 1)).padStart(3, '0')}</div>
-            <div className="subject-block">
-              <span>{style}</span>
-              <strong>{prompt.trim() || '等待提示词'}</strong>
-            </div>
-            <div className="timeline">
-              <span style={{ width: `${progress || 18}%` }} />
-            </div>
+          <div className={`video-frame ${videoUrl ? 'has-video' : ''}`}>
+            {videoUrl ? (
+              <video ref={videoRef} src={videoUrl} controls autoPlay loop playsInline />
+            ) : (
+              <>
+                <div className="scan-layer" />
+                <div className="frame-number">TASK {taskStatus}</div>
+                <div className="subject-block">
+                  <span>{style} / {resolution}</span>
+                  <strong>{isGenerating ? 'HappyHorse 正在合成画面与声音' : (prompt.trim() || '等待生成任务')}</strong>
+                </div>
+                <div className="timeline"><span style={{ width: `${progress || 4}%` }} /></div>
+              </>
+            )}
           </div>
         </section>
 
         <section className="storyboard-panel">
-          <div className="panel-heading">
-            <Clapperboard size={18} />
-            <h2>分镜</h2>
-          </div>
+          <div className="panel-heading"><Clapperboard size={18} /><h2>提示词拆解</h2></div>
           <div className="shot-list">
             {storyboard.map((shot) => (
               <article key={shot.id} className="shot-card">
-                <div>
-                  <span>{shot.time}</span>
-                  <strong>镜头 {shot.id}</strong>
-                </div>
+                <div><span>{shot.time}</span><strong>镜头 {shot.id}</strong></div>
                 <p>{shot.shot}</p>
-                <footer>
-                  <span>{shot.camera}</span>
-                  <span>{shot.meta}</span>
-                </footer>
+                <footer><span>{shot.camera}</span><span>{shot.meta}</span></footer>
               </article>
             ))}
           </div>
