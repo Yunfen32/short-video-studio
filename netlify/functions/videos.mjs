@@ -10,7 +10,7 @@ function json(data, status = 200) {
 }
 
 function getEnv(key) {
-  return Netlify.env.get(key);
+  return Netlify.env.get(key) || process.env[key];
 }
 
 function apiBase() {
