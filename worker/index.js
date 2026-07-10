@@ -1,5 +1,3 @@
-const NOT_FOUND = new Response("Not found", { status: 404 });
-
 function assetRequest(request, pathname) {
   const url = new URL(request.url);
   url.pathname = pathname;
@@ -13,7 +11,7 @@ export default {
     const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
 
     if (!env?.ASSETS?.fetch) {
-      return NOT_FOUND;
+      return new Response("Not found", { status: 404 });
     }
 
     let response = await env.ASSETS.fetch(assetRequest(request, pathname));
