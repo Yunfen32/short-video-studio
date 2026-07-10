@@ -81,7 +81,7 @@ function App() {
   );
   const isGenerating = taskStatus === 'PENDING' || taskStatus === 'RUNNING';
   const progress = progressFor(taskStatus);
-  const canGenerate = prompt.trim().length > 0 && images.length > 0 && !isGenerating;
+  const canGenerate = prompt.trim().length > 0 && !isGenerating;
 
   async function addImages(event) {
     const files = Array.from(event.target.files || []);
@@ -127,6 +127,10 @@ function App() {
 
   async function generateVideo() {
     if (!canGenerate) return;
+    if (images.length === 0) {
+      setError('HappyHorse 参考生视频需要至少上传 1 张参考图');
+      return;
+    }
     setError('');
     setVideoUrl('');
     setTaskStatus('PENDING');
@@ -208,7 +212,7 @@ function App() {
           </label>
 
           <div className="reference-field">
-            <div className="field-label"><span>参考图</span><strong>{images.length}/9</strong></div>
+            <div className="field-label"><span>参考图（至少 1 张）</span><strong>{images.length}/9</strong></div>
             <div className="reference-grid">
               {images.map((source, index) => (
                 <div className="reference-item" key={`${source.slice(-20)}-${index}`}>
