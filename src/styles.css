@@ -111,21 +111,19 @@ h2 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(280px, 380px) minmax(320px, 1fr) minmax(280px, 430px);
+  grid-template-columns: minmax(280px, 380px) minmax(320px, 1fr);
   gap: 16px;
   margin-top: 16px;
 }
 
 .control-panel,
-.preview-panel,
-.storyboard-panel {
+.preview-panel {
   border: 1px solid var(--line);
   background: rgba(11, 12, 10, 0.96);
   min-width: 0;
 }
 
-.control-panel,
-.storyboard-panel {
+.control-panel {
   padding: 16px;
 }
 
@@ -485,44 +483,6 @@ select {
   transition: width 180ms linear;
 }
 
-.shot-list {
-  display: grid;
-  gap: 10px;
-}
-
-.shot-card {
-  border: 1px solid var(--line);
-  padding: 12px;
-  background: #000000;
-}
-
-.shot-card div,
-.shot-card footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.shot-card span,
-.shot-card footer {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.shot-card strong {
-  color: var(--signal);
-}
-
-.shot-card p {
-  margin: 14px 0;
-  line-height: 1.55;
-}
-
-.shot-card footer {
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
-}
-
 @keyframes orbit {
   from {
     transform: rotate(0deg) scale(0.92);
@@ -535,16 +495,6 @@ select {
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@media (max-width: 1180px) {
-  .workspace {
-    grid-template-columns: minmax(280px, 380px) 1fr;
-  }
-
-  .storyboard-panel {
-    grid-column: 1 / -1;
   }
 }
 

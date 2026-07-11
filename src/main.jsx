@@ -1,7 +1,6 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Clapperboard,
   Download,
   Film,
   ImagePlus,
@@ -83,10 +82,6 @@ function App() {
   const videoRef = useRef(null);
   const activeTaskRef = useRef(0);
 
-  const storyboard = useMemo(
-    () => createStoryboard(prompt, ratio, duration, style),
-    [prompt, ratio, duration, style],
-  );
   const isGenerating = taskStatus === 'PENDING' || taskStatus === 'RUNNING';
   const progress = progressFor(taskStatus);
   const canGenerate = prompt.trim().length > 0 && !isGenerating;
@@ -348,18 +343,6 @@ function App() {
           </div>
         </section>
 
-        <section className="storyboard-panel">
-          <div className="panel-heading"><Clapperboard size={18} /><h2>提示词拆解</h2></div>
-          <div className="shot-list">
-            {storyboard.map((shot) => (
-              <article key={shot.id} className="shot-card">
-                <div><span>{shot.time}</span><strong>镜头 {shot.id}</strong></div>
-                <p>{shot.shot}</p>
-                <footer><span>{shot.camera}</span><span>{shot.meta}</span></footer>
-              </article>
-            ))}
-          </div>
-        </section>
       </section>
     </main>
   );
