@@ -79,7 +79,9 @@ function App() {
   const [taskStatus, setTaskStatus] = useState('IDLE');
   const [videoUrl, setVideoUrl] = useState('');
   const [error, setError] = useState('');
+  const [mention, setMention] = useState(null);
   const videoRef = useRef(null);
+  const promptRef = useRef(null);
   const activeTaskRef = useRef(0);
 
   const isGenerating = taskStatus === 'PENDING' || taskStatus === 'RUNNING';
@@ -87,6 +89,34 @@ function App() {
   const canGenerate = prompt.trim().length > 0 && !isGenerating;
   const selectedModel = models.find((item) => item.id === model) || models[0];
   const referenceLimit = selectedModel.id === 'wan2.7-r2v-2026-06-12' ? 5 : selectedModel.id === 'agnes-video-v2.0' ? 1 : 9;
+  const mentionOptions = mention
+    ? images.map((reference, index) => ({ reference, index })).filter(({ reference, index }) => (
+      `参考图${index + 1}${reference.role}`.toLowerCase().includes(mention.query.toLowerCase())
+    ))
+    : [];
+
+  function handlePromptChange(event) {
+    const { value, selectionStart } = event.target;
+    const cursor = selectionStart ?? value.length;
+    const trigger = value.slice(0, cursor).match(/@([^\s@]*)$/);
+    setPrompt(value);
+    setMention(selectedModel.needsReferenceImages && images.length > 0 && trigger
+      ? { start: cursor - trigger[0].length, end: cursor, query: trigger[1] }
+      : null);
+  }
+
+  function insertReferenceMention(index) {
+    if (!mention) return;
+    const token = `@参考图${index + 1}`;
+    const nextPrompt = `${prompt.slice(0, mention.start)}${token}${prompt.slice(mention.end)}`;
+    const nextCursor = mention.start + token.length;
+    setPrompt(nextPrompt);
+    setMention(null);
+    window.requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }
 
   async function addImages(event) {
     const files = Array.from(event.target.files || []);
@@ -172,6 +202,7 @@ function App() {
   function reset() {
     activeTaskRef.current += 1;
     setPrompt('');
+    setMention(null);
     setImages([]);
     setAudioUrl('');
     setVideoUrl('');
@@ -221,14 +252,40 @@ function App() {
           <label className="field">
             <span>视频描述</span>
             <textarea
+              ref={promptRef}
               value={prompt}
               maxLength={2500}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={handlePromptChange}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setMention(null);
+              }}
               placeholder={selectedModel.needsReferenceImages
                 ? '例如：@参考图1 中的银色手表在雨夜街头旋转，镜头推进至屏幕特写'
                 : '例如：一款银色智能手表在雨夜街头旋转，镜头推进至屏幕特写'}
             />
           </label>
+
+          {mention && mentionOptions.length > 0 && (
+            <div className="reference-mention-menu" role="listbox" aria-label="选择参考图">
+              <div className="reference-mention-track">
+                {mentionOptions.map(({ reference, index }) => (
+                  <button
+                    type="button"
+                    className="reference-mention-option"
+                    key={`${reference.source.slice(-20)}-mention-${index}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => insertReferenceMention(index)}
+                    role="option"
+                    aria-label={`插入参考图 ${index + 1}`}
+                  >
+                    <img src={reference.source} alt="" />
+                    <span>@参考图 {index + 1}</span>
+                    <small>{reference.role}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {selectedModel.needsReferenceImages && (
             <div className="reference-field">

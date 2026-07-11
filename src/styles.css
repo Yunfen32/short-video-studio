@@ -180,6 +180,62 @@ textarea {
   line-height: 1.55;
 }
 
+.reference-mention-menu {
+  position: relative;
+  z-index: 3;
+  margin: -6px 0 14px;
+  border: 1px solid var(--signal);
+  background: #000000;
+}
+
+.reference-mention-track {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px;
+  scrollbar-color: var(--signal) #000000;
+}
+
+.reference-mention-option {
+  display: grid;
+  grid-template-columns: 42px max-content;
+  grid-template-rows: 1fr 1fr;
+  column-gap: 8px;
+  flex: 0 0 auto;
+  min-width: 142px;
+  height: 52px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  background: #0b0c0a;
+  color: var(--text);
+  text-align: left;
+}
+
+.reference-mention-option:hover,
+.reference-mention-option:focus-visible {
+  border-color: var(--signal);
+  background: rgba(0, 230, 118, 0.08);
+}
+
+.reference-mention-option img {
+  grid-row: 1 / -1;
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+}
+
+.reference-mention-option span {
+  align-self: end;
+  color: var(--signal);
+  font-size: 12px;
+}
+
+.reference-mention-option small {
+  align-self: start;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .reference-field {
   margin-bottom: 14px;
 }
