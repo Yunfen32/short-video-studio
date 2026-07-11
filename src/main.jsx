@@ -20,6 +20,7 @@ const styles = ['写实广告', '电影感', '产品展示', '动画短片'];
 const models = [
   { id: 'happyhorse-1.1-t2v', label: 'HappyHorse 1.1 文生视频', needsReferenceImages: false },
   { id: 'happyhorse-1.1-r2v', label: 'HappyHorse 1.1 参考图生视频', needsReferenceImages: true },
+  { id: 'agnes-video-v2.0', label: 'Agnes Video V2.0 文生视频', needsReferenceImages: false },
 ];
 const POLL_INTERVAL = 15000;
 
@@ -111,8 +112,10 @@ function App() {
     }
   }
 
-  async function pollTask(taskId, taskToken) {
-    const data = await apiRequest(`/api/videos/${taskId}`);
+  async function pollTask(taskId, taskToken, provider, videoId) {
+    const query = new URLSearchParams({ provider: provider || 'dashscope' });
+    if (videoId) query.set('video_id', videoId);
+    const data = await apiRequest(`/api/videos/${encodeURIComponent(taskId)}?${query}`);
     if (activeTaskRef.current !== taskToken) return;
     setTaskStatus(data.status);
 
@@ -123,7 +126,7 @@ function App() {
     if (data.terminal) throw new Error(data.error || '视频任务未能完成');
 
     window.setTimeout(() => {
-      pollTask(taskId, taskToken).catch((pollError) => {
+      pollTask(taskId, taskToken, provider, videoId).catch((pollError) => {
         if (activeTaskRef.current !== taskToken) return;
         setTaskStatus('FAILED');
         setError(pollError.message);
@@ -161,7 +164,7 @@ function App() {
       });
       if (activeTaskRef.current !== taskToken) return;
       setTaskStatus(data.status);
-      await pollTask(data.taskId, taskToken);
+      await pollTask(data.taskId, taskToken, data.provider, data.videoId);
     } catch (requestError) {
       if (activeTaskRef.current !== taskToken) return;
       setTaskStatus('FAILED');
@@ -197,7 +200,7 @@ function App() {
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">HAPPYHORSE 1.1 / R2V</p>
+          <p className="eyebrow">{selectedModel.id === 'agnes-video-v2.0' ? 'AGNES AI / VIDEO V2.0' : 'HAPPYHORSE 1.1'}</p>
           <h1>参考图驱动的视频生成台</h1>
         </div>
         <div className={`status-strip ${taskStatus === 'FAILED' ? 'error' : ''}`} aria-live="polite">
@@ -313,7 +316,7 @@ function App() {
                 <div className="frame-number">TASK {taskStatus}</div>
                 <div className="subject-block">
                   <span>{style} / {resolution}</span>
-                  <strong>{isGenerating ? 'HappyHorse 正在合成画面与声音' : (prompt.trim() || '等待生成任务')}</strong>
+                  <strong>{isGenerating ? `${selectedModel.label} 正在合成画面与声音` : (prompt.trim() || '等待生成任务')}</strong>
                 </div>
                 <div className="timeline"><span style={{ width: `${progress || 4}%` }} /></div>
               </>
