@@ -5,11 +5,11 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "@netlify/blobs": "^10.7.9",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest"
-  },
-  "devDependencies": {}
+    "vite": "latest"
+  }
 }

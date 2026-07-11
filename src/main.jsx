@@ -21,7 +21,7 @@ const models = [
   { id: 'happyhorse-1.1-t2v', label: 'HappyHorse 1.1 文生视频', needsReferenceImages: false },
   { id: 'happyhorse-1.1-r2v', label: 'HappyHorse 1.1 参考图生视频', needsReferenceImages: true },
   { id: 'wan2.7-r2v-2026-06-12', label: '万相 2.7 人物 / 背景 / 音色参考', needsReferenceImages: true, supportsAudioReference: true },
-  { id: 'agnes-video-v2.0', label: 'Agnes Video V2.0 文生视频', needsReferenceImages: false },
+  { id: 'agnes-video-v2.0', label: 'Agnes Video V2.0 图生视频', needsReferenceImages: true },
 ];
 const POLL_INTERVAL = 15000;
 
@@ -91,7 +91,7 @@ function App() {
   const progress = progressFor(taskStatus);
   const canGenerate = prompt.trim().length > 0 && !isGenerating;
   const selectedModel = models.find((item) => item.id === model) || models[0];
-  const referenceLimit = selectedModel.id === 'wan2.7-r2v-2026-06-12' ? 5 : 9;
+  const referenceLimit = selectedModel.id === 'wan2.7-r2v-2026-06-12' ? 5 : selectedModel.id === 'agnes-video-v2.0' ? 1 : 9;
 
   async function addImages(event) {
     const files = Array.from(event.target.files || []);
@@ -109,7 +109,7 @@ function App() {
     try {
       const encoded = await Promise.all(selected.map(fileToDataUrl));
       setImages((current) => [...current, ...encoded.map((source) => ({ source, role: '人物' }))]);
-      setError(files.length > available ? '最多保留前 9 张参考图' : '');
+      setError(files.length > available ? `最多保留前 ${referenceLimit} 张参考图` : '');
     } catch (readError) {
       setError(readError.message);
     }
@@ -140,7 +140,7 @@ function App() {
   async function generateVideo() {
     if (!canGenerate) return;
     if (selectedModel.needsReferenceImages && images.length === 0) {
-      setError('HappyHorse 参考生视频需要至少上传 1 张参考图');
+      setError('当前模型需要至少上传 1 张参考图');
       return;
     }
     setError('');
@@ -230,7 +230,7 @@ function App() {
               maxLength={2500}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder={selectedModel.needsReferenceImages
-                ? '例如：[Image 1] 中的银色手表在雨夜街头旋转，镜头推进至屏幕特写'
+                ? '例如：@参考图1 中的银色手表在雨夜街头旋转，镜头推进至屏幕特写'
                 : '例如：一款银色智能手表在雨夜街头旋转，镜头推进至屏幕特写'}
             />
           </label>
@@ -242,7 +242,7 @@ function App() {
                 {images.map((reference, index) => (
                   <div className="reference-item" key={`${reference.source.slice(-20)}-${index}`}>
                     <img src={reference.source} alt={`参考图 ${index + 1}`} />
-                    <span>@{reference.role} {index + 1}</span>
+                    <span>@参考图 {index + 1} · {reference.role}</span>
                     <select
                       value={reference.role}
                       onChange={(event) => setImages((current) => current.map((item, itemIndex) => (

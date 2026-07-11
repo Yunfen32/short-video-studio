@@ -1,6 +1,9 @@
+import { getStore } from "@netlify/blobs";
+
 const DEFAULT_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com";
 const AGNES_API_BASE = "https://apihub.agnes-ai.com";
 const AGNES_VIDEO_MODEL = "agnes-video-v2.0";
+const REFERENCE_IMAGE_STORE = "video-reference-images";
 const DASH_SCOPE_MODELS = {
   "happyhorse-1.1-t2v": { needsReferenceImages: false },
   "happyhorse-1.1-r2v": { needsReferenceImages: true },
@@ -29,6 +32,24 @@ function upstreamMessage(payload, fallback) {
 
 function validImageSource(value) {
   return /^https?:\/\//i.test(value) || /^data:image\/(jpeg|jpg|png|webp);base64,/i.test(value);
+}
+
+function referenceImageExtension(contentType) {
+  return { "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp" }[contentType] || "png";
+}
+
+async function publicAgnesImageUrl(source, origin) {
+  if (/^https?:\/\//i.test(source)) return source;
+
+  const match = source.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([\s\S]+)$/i);
+  if (!match) throw new Error("Agnes 参考图格式无效");
+
+  const [, contentType, encoded] = match;
+  const key = `agnes/${crypto.randomUUID()}.${referenceImageExtension(contentType.toLowerCase())}`;
+  await getStore({ name: REFERENCE_IMAGE_STORE, consistency: "strong" }).set(key, Buffer.from(encoded, "base64"), {
+    metadata: { contentType: contentType.toLowerCase() },
+  });
+  return `${origin}/api/reference-images/${encodeURIComponent(key)}`;
 }
 
 function parseRequest(body) {
@@ -127,20 +148,26 @@ async function createDashscopeVideo(body) {
   return json({ taskId: result.output.task_id, provider: "dashscope", status: result.output.task_status || "PENDING" }, 202);
 }
 
-async function createAgnesVideo(body) {
+async function createAgnesVideo(body, origin) {
   const apiKey = getEnv("AGNES_API_KEY");
   if (!apiKey) return json({ error: "Agnes 视频服务尚未配置" }, 503);
 
-  const { prompt, duration } = parseRequest(body);
+  const { prompt, images, duration } = parseRequest(body);
   const error = validationError({ prompt, duration });
   if (error) return json({ error }, 400);
+  if (images.length !== 1 || !validImageSource(images[0]?.source)) {
+    return json({ error: "Agnes 图生视频需要 1 张有效的参考图" }, 400);
+  }
+
+  const imageUrl = await publicAgnesImageUrl(images[0].source, origin);
   const [width, height] = agnesDimensions(body.ratio);
   const response = await fetch(`${AGNES_API_BASE}/v1/videos`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: AGNES_VIDEO_MODEL,
-      prompt,
+      prompt: `${prompt}。@参考图1：以该图片中的${images[0].role === "背景" ? "场景、构图和氛围" : "主体、外观和视觉特征"}为核心参考。`,
+      image: imageUrl,
       width,
       height,
       num_frames: agnesFrames(duration),
@@ -167,7 +194,32 @@ async function createVideo(request) {
   } catch {
     return json({ error: "请求内容不是有效的 JSON" }, 400);
   }
-  return body.model === AGNES_VIDEO_MODEL ? createAgnesVideo(body) : createDashscopeVideo(body);
+  return body.model === AGNES_VIDEO_MODEL ? createAgnesVideo(body, new URL(request.url).origin) : createDashscopeVideo(body);
+}
+
+async function getReferenceImage(encodedKey) {
+  let key;
+  try {
+    key = decodeURIComponent(encodedKey);
+  } catch {
+    return json({ error: "参考图地址无效" }, 400);
+  }
+  if (!key.startsWith("agnes/")) return json({ error: "未找到参考图" }, 404);
+
+  const store = getStore({ name: REFERENCE_IMAGE_STORE, consistency: "strong" });
+  const [image, metadata] = await Promise.all([
+    store.get(key, { type: "arrayBuffer" }),
+    store.getMetadata(key),
+  ]);
+  if (!image) return json({ error: "未找到参考图" }, 404);
+
+  return new Response(image, {
+    headers: {
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-type": metadata?.metadata?.contentType || "image/png",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 async function getDashscopeVideo(taskId) {
@@ -217,6 +269,9 @@ export default async (request) => {
   const url = new URL(request.url);
   try {
     if (url.pathname === "/api/videos" && request.method === "POST") return await createVideo(request);
+
+    const referenceMatch = url.pathname.match(/^\/api\/reference-images\/(.+)$/);
+    if (referenceMatch && request.method === "GET") return await getReferenceImage(referenceMatch[1]);
 
     const taskMatch = url.pathname.match(/^\/api\/videos\/([a-zA-Z0-9_-]+)$/);
     if (taskMatch && request.method === "GET") {
