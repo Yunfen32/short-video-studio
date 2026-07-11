@@ -4,6 +4,7 @@ const AGNES_VIDEO_MODEL = "agnes-video-v2.0";
 const DASH_SCOPE_MODELS = {
   "happyhorse-1.1-t2v": { needsReferenceImages: false },
   "happyhorse-1.1-r2v": { needsReferenceImages: true },
+  "wan2.7-r2v-2026-06-12": { needsReferenceImages: true, supportsAudioReference: true },
 };
 const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"]);
 
@@ -33,9 +34,13 @@ function validImageSource(value) {
 function parseRequest(body) {
   return {
     prompt: typeof body.prompt === "string" ? body.prompt.trim() : "",
-    images: Array.isArray(body.images)
-      ? body.images.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
-      : [],
+    images: Array.isArray(body.images) ? body.images
+      .map((item) => typeof item === "string" ? { source: item.trim(), role: "人物" } : {
+        source: typeof item?.source === "string" ? item.source.trim() : "",
+        role: item?.role === "背景" ? "背景" : "人物",
+      })
+      .filter((item) => item.source) : [],
+    audioUrl: typeof body.audioUrl === "string" ? body.audioUrl.trim() : "",
     duration: Number(body.duration),
   };
 }
@@ -67,14 +72,25 @@ async function createDashscopeVideo(body) {
   const apiKey = getEnv("DASHSCOPE_API_KEY");
   if (!apiKey) return json({ error: "HappyHorse 视频服务尚未配置" }, 503);
 
-  const { prompt, images, duration } = parseRequest(body);
+  const { prompt, images, audioUrl, duration } = parseRequest(body);
   const model = DASH_SCOPE_MODELS[body.model] ? body.model : "happyhorse-1.1-t2v";
   const modelConfig = DASH_SCOPE_MODELS[model];
   const error = validationError({ prompt, duration });
   if (error) return json({ error }, 400);
-  if (modelConfig.needsReferenceImages && (images.length < 1 || images.length > 9 || images.some((item) => !validImageSource(item)))) {
-    return json({ error: "请提供 1-9 张有效的参考图" }, 400);
+  const referenceLimit = model === "wan2.7-r2v-2026-06-12" ? 5 : 9;
+  if (modelConfig.needsReferenceImages && (images.length < 1 || images.length > referenceLimit || images.some((item) => !validImageSource(item.source)))) {
+    return json({ error: `请提供 1-${referenceLimit} 张有效的参考图` }, 400);
   }
+  if (modelConfig.supportsAudioReference && audioUrl && !/^https?:\/\//i.test(audioUrl)) {
+    return json({ error: "音频参考需使用可访问的 MP3 或 WAV URL" }, 400);
+  }
+
+  const promptWithReferences = modelConfig.needsReferenceImages
+    ? `${prompt}。${images.map((item, index) => model === "wan2.7-r2v-2026-06-12"
+      ? `图 ${index + 1}作为${item.role === "背景" ? "背景场景" : "人物主体"}`
+      : `[Image ${index + 1}]作为${item.role === "背景" ? "背景场景" : "人物主体"}`).join("；")}。`
+    : prompt;
+  const firstCharacter = images.find((item) => item.role === "人物") || images[0];
 
   const response = await fetch(`${dashscopeBase()}/api/v1/services/aigc/video-generation/video-synthesis`, {
     method: "POST",
@@ -86,7 +102,14 @@ async function createDashscopeVideo(body) {
     body: JSON.stringify({
       model,
       input: modelConfig.needsReferenceImages
-        ? { prompt, media: images.map((url) => ({ type: "reference_image", url })) }
+        ? {
+          prompt: promptWithReferences,
+          media: images.map((item) => ({
+            type: "reference_image",
+            url: item.source,
+            ...(modelConfig.supportsAudioReference && audioUrl && item === firstCharacter ? { reference_voice: audioUrl } : {}),
+          })),
+        }
         : { prompt },
       parameters: {
         resolution: body.resolution === "720P" ? "720P" : "1080P",

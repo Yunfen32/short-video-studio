@@ -20,6 +20,7 @@ const styles = ['写实广告', '电影感', '产品展示', '动画短片'];
 const models = [
   { id: 'happyhorse-1.1-t2v', label: 'HappyHorse 1.1 文生视频', needsReferenceImages: false },
   { id: 'happyhorse-1.1-r2v', label: 'HappyHorse 1.1 参考图生视频', needsReferenceImages: true },
+  { id: 'wan2.7-r2v-2026-06-12', label: '万相 2.7 人物 / 背景 / 音色参考', needsReferenceImages: true, supportsAudioReference: true },
   { id: 'agnes-video-v2.0', label: 'Agnes Video V2.0 文生视频', needsReferenceImages: false },
 ];
 const POLL_INTERVAL = 15000;
@@ -75,6 +76,7 @@ function App() {
   const [resolution, setResolution] = useState('720P');
   const [watermark, setWatermark] = useState(false);
   const [images, setImages] = useState([]);
+  const [audioUrl, setAudioUrl] = useState('');
   const [taskStatus, setTaskStatus] = useState('IDLE');
   const [videoUrl, setVideoUrl] = useState('');
   const [error, setError] = useState('');
@@ -89,13 +91,14 @@ function App() {
   const progress = progressFor(taskStatus);
   const canGenerate = prompt.trim().length > 0 && !isGenerating;
   const selectedModel = models.find((item) => item.id === model) || models[0];
+  const referenceLimit = selectedModel.id === 'wan2.7-r2v-2026-06-12' ? 5 : 9;
 
   async function addImages(event) {
     const files = Array.from(event.target.files || []);
     event.target.value = '';
     if (!files.length) return;
 
-    const available = 9 - images.length;
+    const available = referenceLimit - images.length;
     const selected = files.slice(0, available);
     const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 20 * 1024 * 1024);
     if (invalid) {
@@ -105,7 +108,7 @@ function App() {
 
     try {
       const encoded = await Promise.all(selected.map(fileToDataUrl));
-      setImages((current) => [...current, ...encoded]);
+      setImages((current) => [...current, ...encoded.map((source) => ({ source, role: '人物' }))]);
       setError(files.length > available ? '最多保留前 9 张参考图' : '');
     } catch (readError) {
       setError(readError.message);
@@ -152,10 +155,9 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          prompt: selectedModel.needsReferenceImages
-            ? `${prompt.trim()}。视觉风格：${style}。参考图按上传顺序对应 [Image 1]、[Image 2]。`
-            : `${prompt.trim()}。视觉风格：${style}。`,
+          prompt: `${prompt.trim()}。视觉风格：${style}。`,
           images: selectedModel.needsReferenceImages ? images : [],
+          audioUrl: selectedModel.supportsAudioReference ? audioUrl.trim() : '',
           ratio,
           duration,
           resolution,
@@ -176,6 +178,7 @@ function App() {
     activeTaskRef.current += 1;
     setPrompt('');
     setImages([]);
+    setAudioUrl('');
     setVideoUrl('');
     setError('');
     setTaskStatus('IDLE');
@@ -234,24 +237,45 @@ function App() {
 
           {selectedModel.needsReferenceImages && (
             <div className="reference-field">
-              <div className="field-label"><span>参考图（至少 1 张）</span><strong>{images.length}/9</strong></div>
+              <div className="field-label"><span>参考图（至少 1 张）</span><strong>{images.length}/{referenceLimit}</strong></div>
               <div className="reference-grid">
-                {images.map((source, index) => (
-                  <div className="reference-item" key={`${source.slice(-20)}-${index}`}>
-                    <img src={source} alt={`参考图 ${index + 1}`} />
-                    <span>[Image {index + 1}]</span>
+                {images.map((reference, index) => (
+                  <div className="reference-item" key={`${reference.source.slice(-20)}-${index}`}>
+                    <img src={reference.source} alt={`参考图 ${index + 1}`} />
+                    <span>@{reference.role} {index + 1}</span>
+                    <select
+                      value={reference.role}
+                      onChange={(event) => setImages((current) => current.map((item, itemIndex) => (
+                        itemIndex === index ? { ...item, role: event.target.value } : item
+                      )))}
+                      aria-label={`参考图 ${index + 1} 的用途`}
+                    >
+                      <option>人物</option>
+                      <option>背景</option>
+                    </select>
                     <button type="button" onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`删除参考图 ${index + 1}`}>
                       <Trash2 size={14} />
                     </button>
                   </div>
                 ))}
-                {images.length < 9 && (
+                {images.length < referenceLimit && (
                   <label className="upload-tile" aria-label="添加参考图">
                     <ImagePlus size={22} />
                     <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addImages} />
                   </label>
                 )}
               </div>
+              {selectedModel.supportsAudioReference && (
+                <label className="field audio-reference-field">
+                  <span>音频参考 URL</span>
+                  <input
+                    type="url"
+                    value={audioUrl}
+                    onChange={(event) => setAudioUrl(event.target.value)}
+                    placeholder="https://example.com/voice.mp3"
+                  />
+                </label>
+              )}
             </div>
           )}
 

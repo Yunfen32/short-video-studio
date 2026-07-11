@@ -157,7 +157,8 @@ h2 {
 }
 
 textarea,
-select {
+select,
+.field input[type="url"] {
   width: 100%;
   border: 1px solid var(--line);
   background: #000000;
@@ -167,6 +168,7 @@ select {
 
 textarea:focus,
 select:focus,
+.field input[type="url"]:focus,
 input:focus-visible,
 button:focus-visible {
   border-color: var(--signal);
@@ -227,6 +229,19 @@ textarea {
   font-size: 9px;
 }
 
+.reference-item select {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: auto;
+  min-height: 24px;
+  padding: 0 4px;
+  border-color: var(--signal);
+  background: #000000;
+  color: var(--signal);
+  font-size: 10px;
+}
+
 .reference-item button {
   position: absolute;
   top: 4px;
@@ -257,6 +272,10 @@ textarea {
   width: 1px;
   height: 1px;
   opacity: 0;
+}
+
+.audio-reference-field {
+  margin: 14px 0 0;
 }
 
 select {
