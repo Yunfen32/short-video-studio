@@ -17,6 +17,10 @@ import './styles.css';
 const aspectRatios = ['9:16', '16:9', '1:1', '4:3', '3:4'];
 const durations = [5, 8, 15];
 const styles = ['写实广告', '电影感', '产品展示', '动画短片'];
+const models = [
+  { id: 'happyhorse-1.1-t2v', label: 'HappyHorse 1.1 文生视频', needsReferenceImages: false },
+  { id: 'happyhorse-1.1-r2v', label: 'HappyHorse 1.1 参考图生视频', needsReferenceImages: true },
+];
 const POLL_INTERVAL = 15000;
 
 function createStoryboard(prompt, ratio, duration, style) {
@@ -66,6 +70,7 @@ function App() {
   const [ratio, setRatio] = useState('9:16');
   const [duration, setDuration] = useState(5);
   const [style, setStyle] = useState('电影感');
+  const [model, setModel] = useState('happyhorse-1.1-t2v');
   const [resolution, setResolution] = useState('720P');
   const [watermark, setWatermark] = useState(false);
   const [images, setImages] = useState([]);
@@ -82,6 +87,7 @@ function App() {
   const isGenerating = taskStatus === 'PENDING' || taskStatus === 'RUNNING';
   const progress = progressFor(taskStatus);
   const canGenerate = prompt.trim().length > 0 && !isGenerating;
+  const selectedModel = models.find((item) => item.id === model) || models[0];
 
   async function addImages(event) {
     const files = Array.from(event.target.files || []);
@@ -127,7 +133,7 @@ function App() {
 
   async function generateVideo() {
     if (!canGenerate) return;
-    if (images.length === 0) {
+    if (selectedModel.needsReferenceImages && images.length === 0) {
       setError('HappyHorse 参考生视频需要至少上传 1 张参考图');
       return;
     }
@@ -142,8 +148,11 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: `${prompt.trim()}。视觉风格：${style}。参考图按上传顺序对应 [Image 1]、[Image 2]。`,
-          images,
+          model,
+          prompt: selectedModel.needsReferenceImages
+            ? `${prompt.trim()}。视觉风格：${style}。参考图按上传顺序对应 [Image 1]、[Image 2]。`
+            : `${prompt.trim()}。视觉风格：${style}。`,
+          images: selectedModel.needsReferenceImages ? images : [],
           ratio,
           duration,
           resolution,
@@ -202,35 +211,46 @@ function App() {
           <div className="panel-heading"><Wand2 size={18} /><h2>生成指令</h2></div>
 
           <label className="field">
+            <span>生成模型</span>
+            <select value={model} onChange={(event) => setModel(event.target.value)}>
+              {models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+
+          <label className="field">
             <span>视频描述</span>
             <textarea
               value={prompt}
               maxLength={2500}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="例如：[Image 1] 中的银色手表在雨夜街头旋转，镜头推进至屏幕特写"
+              placeholder={selectedModel.needsReferenceImages
+                ? '例如：[Image 1] 中的银色手表在雨夜街头旋转，镜头推进至屏幕特写'
+                : '例如：一款银色智能手表在雨夜街头旋转，镜头推进至屏幕特写'}
             />
           </label>
 
-          <div className="reference-field">
-            <div className="field-label"><span>参考图（至少 1 张）</span><strong>{images.length}/9</strong></div>
-            <div className="reference-grid">
-              {images.map((source, index) => (
-                <div className="reference-item" key={`${source.slice(-20)}-${index}`}>
-                  <img src={source} alt={`参考图 ${index + 1}`} />
-                  <span>[Image {index + 1}]</span>
-                  <button type="button" onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`删除参考图 ${index + 1}`}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-              {images.length < 9 && (
-                <label className="upload-tile" aria-label="添加参考图">
-                  <ImagePlus size={22} />
-                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addImages} />
-                </label>
-              )}
+          {selectedModel.needsReferenceImages && (
+            <div className="reference-field">
+              <div className="field-label"><span>参考图（至少 1 张）</span><strong>{images.length}/9</strong></div>
+              <div className="reference-grid">
+                {images.map((source, index) => (
+                  <div className="reference-item" key={`${source.slice(-20)}-${index}`}>
+                    <img src={source} alt={`参考图 ${index + 1}`} />
+                    <span>[Image {index + 1}]</span>
+                    <button type="button" onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`删除参考图 ${index + 1}`}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                {images.length < 9 && (
+                  <label className="upload-tile" aria-label="添加参考图">
+                    <ImagePlus size={22} />
+                    <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addImages} />
+                  </label>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="settings-grid">
             <label className="field">

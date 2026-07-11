@@ -1,5 +1,8 @@
 const DEFAULT_API_BASE = "https://dashscope.aliyuncs.com";
-const MODEL = "happyhorse-1.1-r2v";
+const MODELS = {
+  "happyhorse-1.1-t2v": { needsReferenceImages: false },
+  "happyhorse-1.1-r2v": { needsReferenceImages: true },
+};
 const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"]);
 
 function json(data, status = 200) {
@@ -46,10 +49,12 @@ async function createVideo(request, env) {
     ? body.images.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
     : [];
   const duration = Number(body.duration);
+  const model = MODELS[body.model] ? body.model : "happyhorse-1.1-t2v";
+  const modelConfig = MODELS[model];
   const allowedRatios = new Set(["16:9", "9:16", "3:4", "4:3", "4:5", "5:4", "1:1", "9:21", "21:9"]);
 
   if (!prompt || prompt.length > 5000) return json({ error: "提示词长度需在 1-5000 个字符之间" }, 400);
-  if (images.length < 1 || images.length > 9 || images.some((item) => !validImageSource(item))) {
+  if (modelConfig.needsReferenceImages && (images.length < 1 || images.length > 9 || images.some((item) => !validImageSource(item)))) {
     return json({ error: "请提供 1-9 张有效的参考图" }, 400);
   }
   if (!Number.isInteger(duration) || duration < 3 || duration > 15) {
@@ -57,11 +62,10 @@ async function createVideo(request, env) {
   }
 
   const payload = {
-    model: MODEL,
-    input: {
-      prompt,
-      media: images.map((url) => ({ type: "reference_image", url })),
-    },
+    model,
+    input: modelConfig.needsReferenceImages
+      ? { prompt, media: images.map((url) => ({ type: "reference_image", url })) }
+      : { prompt },
     parameters: {
       resolution: body.resolution === "720P" ? "720P" : "1080P",
       ratio: allowedRatios.has(body.ratio) ? body.ratio : "16:9",
