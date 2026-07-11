@@ -155,19 +155,24 @@ async function createAgnesVideo(body, origin) {
   const { prompt, images, duration } = parseRequest(body);
   const error = validationError({ prompt, duration });
   if (error) return json({ error }, 400);
-  if (images.length !== 1 || !validImageSource(images[0]?.source)) {
-    return json({ error: "Agnes 图生视频需要 1 张有效的参考图" }, 400);
+  if (images.length < 1 || images.length > 5 || images.some((item) => !validImageSource(item.source))) {
+    return json({ error: "Agnes 视频需要 1-5 张有效的参考图" }, 400);
   }
 
-  const imageUrl = await publicAgnesImageUrl(images[0].source, origin);
+  const imageUrls = await Promise.all(images.map((item) => publicAgnesImageUrl(item.source, origin)));
+  const referencePrompt = images.map((item, index) => (
+    `@参考图${index + 1}：以该图片中的${item.role === "背景" ? "场景、构图和氛围" : "主体、外观和视觉特征"}为参考`
+  )).join("；");
   const [width, height] = agnesDimensions(body.ratio);
   const response = await fetch(`${AGNES_API_BASE}/v1/videos`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: AGNES_VIDEO_MODEL,
-      prompt: `${prompt}。@参考图1：以该图片中的${images[0].role === "背景" ? "场景、构图和氛围" : "主体、外观和视觉特征"}为核心参考。`,
-      image: imageUrl,
+      prompt: `${prompt}。${referencePrompt}。`,
+      ...(imageUrls.length === 1
+        ? { image: imageUrls[0] }
+        : { extra_body: { image: imageUrls, mode: "keyframes" } }),
       width,
       height,
       num_frames: agnesFrames(duration),

@@ -88,7 +88,7 @@ function App() {
   const progress = progressFor(taskStatus);
   const canGenerate = prompt.trim().length > 0 && !isGenerating;
   const selectedModel = models.find((item) => item.id === model) || models[0];
-  const referenceLimit = selectedModel.id === 'wan2.7-r2v-2026-06-12' ? 5 : selectedModel.id === 'agnes-video-v2.0' ? 1 : 9;
+  const referenceLimit = selectedModel.id === 'wan2.7-r2v-2026-06-12' || selectedModel.id === 'agnes-video-v2.0' ? 5 : 9;
   const mentionOptions = mention
     ? images.map((reference, index) => ({ reference, index })).filter(({ reference, index }) => (
       `参考图${index + 1}${reference.role}`.toLowerCase().includes(mention.query.toLowerCase())
