@@ -1,13 +1,20 @@
 :root {
   color-scheme: light;
-  --surface: #ffffff;
-  --panel: #f7f7f8;
-  --line: #d8d8dc;
-  --line-strong: #000000;
-  --text: #000000;
-  --muted: #5b5b61;
-  --signal: #000000;
-  --danger: #000000;
+  --surface: #dfe7d8;
+  --surface-raised: #e8dcc7;
+  --panel: #d4dfcf;
+  --line: #a4ad98;
+  --line-strong: #606c38;
+  --text: #35402b;
+  --muted: #59624d;
+  --signal: #606c38;
+  --signal-soft: #8b9d83;
+  --on-signal: #eee5d5;
+  --accent: #755820;
+  --danger: #8f4e2f;
+  --video: #20271c;
+  --shadow: 0 10px 26px rgba(96, 108, 56, 0.13);
+  --shadow-hover: 0 12px 30px rgba(96, 108, 56, 0.18);
 }
 
 * {
@@ -19,8 +26,23 @@ body {
   min-width: 320px;
   background: var(--surface);
   color: var(--text);
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-family: "Avenir Next", "Segoe UI", "Microsoft YaHei", sans-serif;
   font-variant-numeric: tabular-nums;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='.8'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--signal-soft);
+  color: var(--on-signal);
 }
 
 button,
@@ -33,6 +55,16 @@ input {
 
 button {
   cursor: pointer;
+}
+
+button,
+label,
+textarea,
+select,
+input,
+a {
+  transition: background-color 260ms ease, border-color 260ms ease,
+    color 260ms ease, box-shadow 260ms ease, transform 260ms ease;
 }
 
 a {
@@ -63,7 +95,10 @@ p {
   gap: 24px;
   min-height: 96px;
   border: 1px solid var(--line);
-  background: var(--panel);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .brand-block {
@@ -74,13 +109,15 @@ p {
 
 .eyebrow {
   margin-bottom: 8px;
-  color: var(--signal);
+  color: var(--accent);
   font-size: 11px;
+  font-weight: 700;
 }
 
 h1 {
   font-size: 34px;
   line-height: 1;
+  font-weight: 700;
 }
 
 h2 {
@@ -121,6 +158,7 @@ h2 {
 .service-metrics .status-strip {
   border-left-color: var(--signal);
   color: var(--signal);
+  background: rgba(139, 157, 131, 0.16);
 }
 
 .service-metrics .status-strip span,
@@ -131,13 +169,14 @@ h2 {
 .service-metrics .status-strip.error {
   border-left-color: var(--danger);
   color: var(--danger);
+  background: rgba(198, 107, 61, 0.12);
 }
 
 .workspace {
   display: grid;
   grid-template-columns: minmax(360px, 460px) minmax(420px, 1fr);
-  gap: 14px;
-  margin-top: 14px;
+  gap: 16px;
+  margin-top: 16px;
   align-items: start;
 }
 
@@ -145,7 +184,10 @@ h2 {
 .preview-panel {
   min-width: 0;
   border: 1px solid var(--line);
+  border-radius: 8px;
   background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .control-panel {
@@ -172,10 +214,16 @@ h2 {
   color: var(--signal);
 }
 
+.panel-heading svg {
+  color: var(--accent);
+}
+
 .model-console {
   margin-bottom: 16px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  overflow: hidden;
 }
 
 .category-tabs {
@@ -192,8 +240,13 @@ h2 {
   padding: 8px 6px;
   border: 0;
   border-right: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--muted);
+}
+
+.category-tabs button:hover:not(.active) {
+  background: rgba(139, 157, 131, 0.18);
+  color: var(--text);
 }
 
 .category-tabs button:last-child {
@@ -214,19 +267,19 @@ h2 {
 
 .category-tabs button.active {
   background: var(--signal);
-  color: var(--surface);
+  color: var(--on-signal);
 }
 
 .category-tabs button.active strong {
-  color: var(--surface);
+  color: var(--on-signal);
 }
 
 .model-track {
   display: flex;
   gap: 7px;
   overflow-x: auto;
-  padding: 9px 0;
-  scrollbar-color: var(--signal) var(--surface);
+  padding: 9px;
+  scrollbar-color: var(--signal-soft) var(--surface-raised);
 }
 
 .model-option {
@@ -238,7 +291,8 @@ h2 {
   height: 70px;
   padding: 9px;
   border: 1px solid var(--line);
-  background: var(--surface);
+  border-radius: 7px;
+  background: var(--surface-raised);
   color: var(--text);
   text-align: left;
 }
@@ -270,20 +324,26 @@ h2 {
   border-color: var(--signal);
 }
 
+.model-option:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(96, 108, 56, 0.12);
+}
+
 .model-option.active {
   border-left-width: 3px;
   padding-left: 7px;
   background: var(--signal);
-  color: var(--surface);
+  color: var(--on-signal);
+  box-shadow: 0 7px 16px rgba(96, 108, 56, 0.2);
 }
 
 .model-option.active > span,
 .model-option.active > em {
-  color: #d8d8dc;
+  color: var(--on-signal);
 }
 
 .model-readout {
-  padding: 10px 0 12px;
+  padding: 10px 12px 12px;
 }
 
 .model-readout > div:first-child {
@@ -307,6 +367,8 @@ h2 {
 .capability-row > span {
   padding: 3px 5px;
   border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: rgba(139, 157, 131, 0.12);
   color: var(--muted);
   font-size: 9px;
 }
@@ -330,7 +392,8 @@ input[type="url"],
 input[type="number"] {
   width: 100%;
   border: 1px solid var(--line);
-  background: var(--surface);
+  border-radius: 7px;
+  background: var(--surface-raised);
   color: var(--text);
   outline: none;
 }
@@ -342,9 +405,10 @@ input[type="number"]:focus,
 input:focus-visible,
 button:focus-visible,
 a:focus-visible {
-  border-color: var(--signal);
-  outline: 1px solid var(--signal);
-  outline-offset: 0;
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(192, 142, 58, 0.16);
 }
 
 textarea {
@@ -363,7 +427,7 @@ textarea {
   right: 8px;
   bottom: 7px;
   padding: 2px 4px;
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--muted);
   font-size: 9px;
 }
@@ -376,12 +440,14 @@ select {
 .input-with-icon {
   min-height: 42px;
   border: 1px solid var(--line);
-  background: var(--surface);
+  border-radius: 7px;
+  background: var(--surface-raised);
   color: var(--muted);
 }
 
 .input-with-icon:focus-within {
-  border-color: var(--signal);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(192, 142, 58, 0.16);
 }
 
 .input-with-icon > svg {
@@ -401,7 +467,10 @@ select {
   z-index: 3;
   margin: -5px 0 13px;
   border: 1px solid var(--signal);
-  background: var(--surface);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .reference-mention-track {
@@ -409,7 +478,7 @@ select {
   gap: 7px;
   overflow-x: auto;
   padding: 7px;
-  scrollbar-color: var(--signal) var(--surface);
+  scrollbar-color: var(--signal-soft) var(--surface-raised);
 }
 
 .reference-mention-option {
@@ -422,6 +491,7 @@ select {
   height: 50px;
   padding: 4px;
   border: 1px solid var(--line);
+  border-radius: 6px;
   background: var(--panel);
   color: var(--text);
   text-align: left;
@@ -436,6 +506,7 @@ select {
   grid-row: 1 / -1;
   width: 40px;
   height: 40px;
+  border-radius: 4px;
   object-fit: cover;
 }
 
@@ -478,7 +549,8 @@ select {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  background: var(--surface);
+  border-radius: 8px;
+  background: var(--surface-raised);
 }
 
 .reference-item img {
@@ -494,8 +566,9 @@ select {
   max-width: calc(100% - 8px);
   overflow: hidden;
   padding: 2px 3px;
-  background: var(--text);
-  color: var(--surface);
+  border-radius: 4px;
+  background: var(--video);
+  color: var(--on-signal);
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -510,8 +583,9 @@ select {
   min-height: 22px;
   padding: 0 3px;
   border-color: var(--signal);
-  background: var(--text);
-  color: var(--surface);
+  border-radius: 4px;
+  background: var(--video);
+  color: var(--on-signal);
   font-size: 9px;
   font-style: normal;
 }
@@ -530,7 +604,8 @@ select {
   width: 25px;
   height: 25px;
   border: 1px solid var(--danger);
-  background: var(--surface);
+  border-radius: 6px;
+  background: var(--surface-raised);
   color: var(--danger);
 }
 
@@ -549,6 +624,9 @@ select {
 
 .upload-tile:hover {
   border-color: var(--signal);
+  background: rgba(139, 157, 131, 0.18);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(96, 108, 56, 0.12);
 }
 
 .upload-tile input {
@@ -616,6 +694,8 @@ select {
   margin-bottom: 13px;
   padding: 9px;
   border: 1px solid var(--danger);
+  border-radius: 7px;
+  background: rgba(198, 107, 61, 0.12);
   color: var(--text);
   font-size: 11px;
   line-height: 1.45;
@@ -632,8 +712,7 @@ select {
 .primary-action,
 .icon-action {
   border: 1px solid var(--signal);
-  background: var(--surface);
-  color: var(--signal);
+  border-radius: 7px;
 }
 
 .primary-action {
@@ -643,6 +722,9 @@ select {
   gap: 8px;
   min-height: 46px;
   flex: 1;
+  background: var(--signal);
+  color: var(--on-signal);
+  box-shadow: 0 7px 16px rgba(96, 108, 56, 0.18);
 }
 
 .icon-action {
@@ -650,6 +732,8 @@ select {
   place-items: center;
   width: 46px;
   height: 46px;
+  background: var(--surface-raised);
+  color: var(--signal);
 }
 
 .icon-action.disabled {
@@ -660,8 +744,18 @@ select {
 .primary-action:hover:not(:disabled),
 .icon-action:hover:not(:disabled),
 a.icon-action:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-hover);
+}
+
+.primary-action:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.icon-action:hover:not(:disabled),
+a.icon-action:hover {
   background: var(--signal);
-  color: var(--surface);
+  color: var(--on-signal);
 }
 
 .spin {
@@ -675,6 +769,7 @@ a.icon-action:hover {
   min-height: 62px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
 }
 
 .preview-toolbar .panel-heading {
@@ -725,7 +820,7 @@ a.icon-action:hover {
   width: 100%;
   height: 720px;
   object-fit: contain;
-  background: #000000;
+  background: var(--video);
 }
 
 .scan-layer {
@@ -740,7 +835,7 @@ a.icon-action:hover {
   position: absolute;
   top: 18px;
   right: 18px;
-  color: var(--signal);
+  color: var(--accent);
   font-size: 10px;
 }
 
@@ -750,7 +845,8 @@ a.icon-action:hover {
   top: 44%;
   width: 220px;
   height: 220px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--signal-soft);
+  opacity: 0.62;
   transform: translate(-50%, -50%);
 }
 
@@ -758,7 +854,7 @@ a.icon-action:hover {
 .frame-crosshair::after {
   content: "";
   position: absolute;
-  background: var(--line-strong);
+  background: var(--signal-soft);
 }
 
 .frame-crosshair::before {
@@ -805,6 +901,9 @@ a.icon-action:hover {
   bottom: 22px;
   height: 8px;
   border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  overflow: hidden;
 }
 
 .timeline span {
@@ -812,6 +911,17 @@ a.icon-action:hover {
   height: 100%;
   background: var(--signal);
   transition: width 180ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 @keyframes spin {
