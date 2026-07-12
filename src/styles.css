@@ -1,13 +1,13 @@
 :root {
-  color-scheme: dark;
-  --surface: #000000;
-  --panel: #0b0c0a;
-  --line: #2a2d25;
-  --line-strong: #596052;
-  --text: #f3f6ec;
-  --muted: #a4ad99;
-  --signal: #00e676;
-  --danger: #ff3b30;
+  color-scheme: light;
+  --surface: #ffffff;
+  --panel: #f7f7f8;
+  --line: #d8d8dc;
+  --line-strong: #000000;
+  --text: #000000;
+  --muted: #5b5b61;
+  --signal: #000000;
+  --danger: #000000;
 }
 
 * {
@@ -19,7 +19,7 @@ body {
   min-width: 320px;
   background: var(--surface);
   color: var(--text);
-  font-family: "IBM Plex Mono", "JetBrains Mono", Consolas, monospace;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
@@ -192,7 +192,7 @@ h2 {
   padding: 8px 6px;
   border: 0;
   border-right: 1px solid var(--line);
-  background: #000000;
+  background: var(--surface);
   color: var(--muted);
 }
 
@@ -214,11 +214,11 @@ h2 {
 
 .category-tabs button.active {
   background: var(--signal);
-  color: #000000;
+  color: var(--surface);
 }
 
 .category-tabs button.active strong {
-  color: #000000;
+  color: var(--surface);
 }
 
 .model-track {
@@ -226,7 +226,7 @@ h2 {
   gap: 7px;
   overflow-x: auto;
   padding: 9px 0;
-  scrollbar-color: var(--signal) #000000;
+  scrollbar-color: var(--signal) var(--surface);
 }
 
 .model-option {
@@ -238,7 +238,7 @@ h2 {
   height: 70px;
   padding: 9px;
   border: 1px solid var(--line);
-  background: #000000;
+  background: var(--surface);
   color: var(--text);
   text-align: left;
 }
@@ -273,6 +273,13 @@ h2 {
 .model-option.active {
   border-left-width: 3px;
   padding-left: 7px;
+  background: var(--signal);
+  color: var(--surface);
+}
+
+.model-option.active > span,
+.model-option.active > em {
+  color: #d8d8dc;
 }
 
 .model-readout {
@@ -323,7 +330,7 @@ input[type="url"],
 input[type="number"] {
   width: 100%;
   border: 1px solid var(--line);
-  background: #000000;
+  background: var(--surface);
   color: var(--text);
   outline: none;
 }
@@ -356,7 +363,7 @@ textarea {
   right: 8px;
   bottom: 7px;
   padding: 2px 4px;
-  background: #000000;
+  background: var(--surface);
   color: var(--muted);
   font-size: 9px;
 }
@@ -369,7 +376,7 @@ select {
 .input-with-icon {
   min-height: 42px;
   border: 1px solid var(--line);
-  background: #000000;
+  background: var(--surface);
   color: var(--muted);
 }
 
@@ -394,7 +401,7 @@ select {
   z-index: 3;
   margin: -5px 0 13px;
   border: 1px solid var(--signal);
-  background: #000000;
+  background: var(--surface);
 }
 
 .reference-mention-track {
@@ -402,7 +409,7 @@ select {
   gap: 7px;
   overflow-x: auto;
   padding: 7px;
-  scrollbar-color: var(--signal) #000000;
+  scrollbar-color: var(--signal) var(--surface);
 }
 
 .reference-mention-option {
@@ -471,7 +478,7 @@ select {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  background: #000000;
+  background: var(--surface);
 }
 
 .reference-item img {
@@ -487,8 +494,8 @@ select {
   max-width: calc(100% - 8px);
   overflow: hidden;
   padding: 2px 3px;
-  background: #000000;
-  color: var(--signal);
+  background: var(--text);
+  color: var(--surface);
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -503,8 +510,8 @@ select {
   min-height: 22px;
   padding: 0 3px;
   border-color: var(--signal);
-  background: #000000;
-  color: var(--signal);
+  background: var(--text);
+  color: var(--surface);
   font-size: 9px;
   font-style: normal;
 }
@@ -523,7 +530,7 @@ select {
   width: 25px;
   height: 25px;
   border: 1px solid var(--danger);
-  background: #000000;
+  background: var(--surface);
   color: var(--danger);
 }
 
@@ -609,7 +616,7 @@ select {
   margin-bottom: 13px;
   padding: 9px;
   border: 1px solid var(--danger);
-  color: #ff817a;
+  color: var(--text);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -625,7 +632,7 @@ select {
 .primary-action,
 .icon-action {
   border: 1px solid var(--signal);
-  background: #000000;
+  background: var(--surface);
   color: var(--signal);
 }
 
@@ -654,7 +661,7 @@ select {
 .icon-action:hover:not(:disabled),
 a.icon-action:hover {
   background: var(--signal);
-  color: #000000;
+  color: var(--surface);
 }
 
 .spin {
@@ -706,7 +713,7 @@ a.icon-action:hover {
   position: relative;
   min-height: 720px;
   overflow: hidden;
-  background: #000000;
+  background: var(--surface);
 }
 
 .video-frame.has-video {
