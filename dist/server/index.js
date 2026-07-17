@@ -1,19 +1,4 @@
-const DEFAULT_API_BASE = "https://dashscope.aliyuncs.com";
-const MODELS = {
-  "happyhorse-1.1-t2v": { needsReferenceImages: false },
-  "happyhorse-1.1-r2v": { needsReferenceImages: true },
-};
-const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"]);
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
-}
+import { handleVideoApiRequest } from "../shared/video-api.mjs";
 
 function assetRequest(request, pathname) {
   const url = new URL(request.url);
@@ -22,114 +7,61 @@ function assetRequest(request, pathname) {
   return new Request(url, request);
 }
 
-function apiBase(env) {
-  return (env.DASHSCOPE_BASE_URL || DEFAULT_API_BASE).replace(/\/$/, "");
-}
-
-function upstreamMessage(payload, fallback) {
-  return payload?.message || payload?.code || fallback;
-}
-
-function validImageSource(value) {
-  return /^https?:\/\//i.test(value) || /^data:image\/(jpeg|jpg|png|webp);base64,/i.test(value);
-}
-
-async function createVideo(request, env) {
-  if (!env.DASHSCOPE_API_KEY) return json({ error: "视频服务尚未配置" }, 503);
-
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "请求内容不是有效的 JSON" }, 400);
-  }
-
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const images = Array.isArray(body.images)
-    ? body.images.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
-    : [];
-  const duration = Number(body.duration);
-  const model = MODELS[body.model] ? body.model : "happyhorse-1.1-t2v";
-  const modelConfig = MODELS[model];
-  const allowedRatios = new Set(["16:9", "9:16", "3:4", "4:3", "4:5", "5:4", "1:1", "9:21", "21:9"]);
-
-  if (!prompt || prompt.length > 5000) return json({ error: "提示词长度需在 1-5000 个字符之间" }, 400);
-  if (modelConfig.needsReferenceImages && (images.length < 1 || images.length > 9 || images.some((item) => !validImageSource(item)))) {
-    return json({ error: "请提供 1-9 张有效的参考图" }, 400);
-  }
-  if (!Number.isInteger(duration) || duration < 3 || duration > 15) {
-    return json({ error: "视频时长需为 3-15 秒" }, 400);
-  }
-
-  const payload = {
-    model,
-    input: modelConfig.needsReferenceImages
-      ? { prompt, media: images.map((url) => ({ type: "reference_image", url })) }
-      : { prompt },
-    parameters: {
-      resolution: body.resolution === "720P" ? "720P" : "1080P",
-      ratio: allowedRatios.has(body.ratio) ? body.ratio : "16:9",
-      duration,
-      watermark: Boolean(body.watermark),
+function createStorage(bucket) {
+  if (!bucket) return null;
+  return {
+    async getJSON(key) {
+      const object = await bucket.get(key);
+      if (!object) return null;
+      try {
+        return JSON.parse(await object.text());
+      } catch {
+        return null;
+      }
+    },
+    setJSON(key, value) {
+      return bucket.put(key, JSON.stringify(value), {
+        httpMetadata: { contentType: "application/json; charset=utf-8" },
+      });
+    },
+    put(key, body, metadata = {}) {
+      return bucket.put(key, body, {
+        httpMetadata: { contentType: metadata.contentType || "application/octet-stream" },
+        customMetadata: { createdAt: String(Number(metadata.createdAt) || Date.now()) },
+      });
+    },
+    async get(key) {
+      const object = await bucket.get(key);
+      if (!object) return null;
+      return {
+        body: object.body,
+        contentType: object.httpMetadata?.contentType,
+        createdAt: Number(object.customMetadata?.createdAt) || 0,
+      };
+    },
+    async cleanupExpired(prefix, cutoff) {
+      const listing = await bucket.list({ prefix, limit: 100, include: ["customMetadata"] });
+      const expired = listing.objects
+        .filter((object) => Number(object.customMetadata?.createdAt) < cutoff)
+        .map((object) => object.key);
+      if (expired.length) await bucket.delete(expired);
     },
   };
-
-  const response = await fetch(`${apiBase(env)}/api/v1/services/aigc/video-generation/video-synthesis`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.DASHSCOPE_API_KEY}`,
-      "Content-Type": "application/json",
-      "X-DashScope-Async": "enable",
-    },
-    body: JSON.stringify(payload),
-  });
-  const result = await response.json().catch(() => ({}));
-
-  if (!response.ok || !result?.output?.task_id) {
-    return json({ error: upstreamMessage(result, "视频任务创建失败") }, response.status || 502);
-  }
-
-  return json({ taskId: result.output.task_id, status: result.output.task_status || "PENDING" }, 202);
-}
-
-async function getVideo(taskId, env) {
-  if (!env.DASHSCOPE_API_KEY) return json({ error: "视频服务尚未配置" }, 503);
-  if (!/^[a-zA-Z0-9-]{8,128}$/.test(taskId)) return json({ error: "任务 ID 无效" }, 400);
-
-  const response = await fetch(`${apiBase(env)}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
-    headers: { Authorization: `Bearer ${env.DASHSCOPE_API_KEY}` },
-  });
-  const result = await response.json().catch(() => ({}));
-  const output = result?.output || {};
-
-  if (!response.ok) {
-    return json({ error: upstreamMessage(result, "任务状态查询失败") }, response.status || 502);
-  }
-
-  const status = output.task_status || "UNKNOWN";
-  return json({
-    taskId,
-    status,
-    terminal: TERMINAL_STATUSES.has(status),
-    videoUrl: output.video_url || null,
-    error: status === "FAILED" ? (output.message || result.message || "视频生成失败") : null,
-  });
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, context) {
+    const apiResponse = await handleVideoApiRequest(request, {
+      platform: "sites",
+      getEnv: (key) => env?.[key] || "",
+      storage: createStorage(env?.VIDEO_STORAGE),
+      fetch: globalThis.fetch,
+      clientId: request.headers.get("cf-connecting-ip") || "",
+      waitUntil: context?.waitUntil?.bind(context),
+    });
+    if (apiResponse) return apiResponse;
+
     const url = new URL(request.url);
-
-    try {
-      if (url.pathname === "/api/videos" && request.method === "POST") {
-        return await createVideo(request, env);
-      }
-      const taskMatch = url.pathname.match(/^\/api\/videos\/([a-zA-Z0-9-]+)$/);
-      if (taskMatch && request.method === "GET") return await getVideo(taskMatch[1], env);
-    } catch (error) {
-      return json({ error: error instanceof Error ? error.message : "视频服务暂时不可用" }, 502);
-    }
-
     const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
     if (!env?.ASSETS?.fetch) return new Response("Not found", { status: 404 });
 
