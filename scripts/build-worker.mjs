@@ -1,7 +1,23 @@
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 
 await mkdir('dist/server', { recursive: true });
-await mkdir('dist/shared', { recursive: true });
-await copyFile('worker/index.js', 'dist/server/index.js');
-await copyFile('shared/video-api.mjs', 'dist/shared/video-api.mjs');
-await copyFile('shared/video-models.mjs', 'dist/shared/video-models.mjs');
+await mkdir('dist/server/shared', { recursive: true });
+
+const workerSource = await readFile('worker/index.js', 'utf8');
+const serverEntry = workerSource.replace(
+  '../shared/video-api.mjs',
+  './shared/video-api.mjs',
+);
+
+if (serverEntry === workerSource) {
+  throw new Error('Worker shared API import was not found');
+}
+
+await writeFile('dist/server/index.js', serverEntry);
+
+const sharedModules = (await readdir('shared'))
+  .filter((file) => file.endsWith('.mjs'));
+
+await Promise.all(sharedModules.map((file) => (
+  copyFile(`shared/${file}`, `dist/server/shared/${file}`)
+)));
