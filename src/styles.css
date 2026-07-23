@@ -114,6 +114,33 @@ select {
   border: 1px solid var(--line);
 }
 
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.mode-toggle {
+  min-height: 52px;
+  padding: 0 13px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.mode-toggle:hover,
+.mode-toggle.active {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
 .service-metrics > div {
   min-height: 52px;
   padding: 9px 12px;
@@ -196,6 +223,39 @@ select {
 .access-strip.error > svg,
 .access-strip.error > strong {
   color: var(--red);
+}
+
+.demo-strip {
+  min-height: 46px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--signal);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+}
+
+.demo-strip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.demo-strip button {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--black);
+  color: var(--white);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.demo-strip button:hover {
+  border-color: var(--signal);
+  color: var(--signal);
 }
 
 .workflow-groups {
@@ -1180,6 +1240,15 @@ select {
     flex-direction: column;
   }
 
+  .topbar-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mode-toggle {
+    justify-content: center;
+  }
+
   .service-metrics {
     width: 100%;
     grid-template-columns: repeat(3, 1fr);
@@ -1189,6 +1258,11 @@ select {
     padding-left: 16px;
     padding-right: 16px;
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .demo-strip {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
   .access-strip > strong {

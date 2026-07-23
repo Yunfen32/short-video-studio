@@ -343,6 +343,22 @@ const MODEL_CATALOG = [
     summary: "文字、单图与关键帧生成",
   },
   {
+    id: "grok-imagine-video",
+    label: "Grok Imagine Video",
+    family: "Grok Imagine",
+    provider: "sub2api_grok",
+    category: "text",
+    protocol: "grokVideo",
+    featured: true,
+    imageMin: 1,
+    imageMax: 5,
+    durations: TEXT_DURATIONS,
+    resolutions: ["480P", "720P"],
+    ratios: true,
+    ratioOptions: STANDARD_RATIOS,
+    summary: "文生、首帧和多图参考视频",
+  },
+  {
     id: "wan2.7-r2v",
     label: "万相 2.7 参考生视频",
     family: "Wan 2.7",
@@ -560,6 +576,13 @@ function workflowCapabilitiesFor(model) {
       keyframes: capability({ imageMin: 2, imageMax: 5, imageMode: "keyframes" }),
     };
   }
+  if (model.protocol === "grokVideo") {
+    return {
+      "text-to-video": capability(),
+      "first-frame": capability({ imageMin: 1, imageMax: 1, imageMode: "first_frame" }),
+      "multi-reference": capability({ imageMin: 1, imageMax: model.imageMax, imageMode: "reference" }),
+    };
+  }
   if (model.protocol === "happyhorseR2v") {
     return {
       "multi-reference": capability({
@@ -628,16 +651,17 @@ function workflowCapabilitiesFor(model) {
 
 function modelControlsFor(model) {
   const isAgnes = model.protocol === "agnes";
+  const isGrokVideo = model.protocol === "grokVideo";
   const isHappyHorse = model.protocol.startsWith("happyhorse");
   const isAnimation = model.protocol === "animateMove" || model.protocol === "animateMix";
   const isLegacyReference = model.protocol === "r2vLegacy";
   const ratioOptions = model.ratioOptions || (model.ratios ? STANDARD_RATIOS : []);
   return {
     durationMode: model.durationMode || "output",
-    supportsWatermark: !isAgnes,
-    supportsPromptExtend: !isAgnes && !isHappyHorse && !isAnimation && !isLegacyReference,
-    supportsNegativePrompt: isAgnes || (!isHappyHorse && !isAnimation),
-    supportsSeed: !isAnimation && !isLegacyReference,
+    supportsWatermark: !isAgnes && !isGrokVideo,
+    supportsPromptExtend: !isAgnes && !isGrokVideo && !isHappyHorse && !isAnimation && !isLegacyReference,
+    supportsNegativePrompt: isAgnes || (!isGrokVideo && !isHappyHorse && !isAnimation),
+    supportsSeed: !isGrokVideo && !isAnimation && !isLegacyReference,
     supportsAudioSetting: Boolean(model.supportsAudioSetting),
     ratioOptions,
     outputAudio: Boolean(
@@ -669,7 +693,9 @@ export const VIDEO_MODELS = MODEL_CATALOG.map((model) => {
   return {
     ...model,
     ...controls,
-    providerLabel: model.provider === "agnes" ? "Agnes AI" : "阿里云百炼",
+    providerLabel: model.provider === "agnes"
+      ? "Agnes AI"
+      : model.provider === "sub2api_grok" ? "Sub2API Grok" : "阿里云百炼",
     familyLabel: model.family.replace(/^Wan /, "万相 "),
     variantLabel: variantLabelFor(model),
     workflowCapabilities: Object.fromEntries(
@@ -699,6 +725,10 @@ export function inferVideoWorkflow(model, { images = [], videoUrl = "" } = {}) {
   if (model.protocol === "agnes") {
     if (images.length === 0) return "text-to-video";
     return images.length === 1 ? "first-frame" : "keyframes";
+  }
+  if (model.protocol === "grokVideo") {
+    if (images.length === 0) return "text-to-video";
+    return images.length === 1 ? "first-frame" : "multi-reference";
   }
   if (model.protocol === "i2v27") {
     if (videoUrl) return "video-continuation";

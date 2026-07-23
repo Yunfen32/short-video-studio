@@ -10,6 +10,7 @@ import {
 import {
   buildAgnesPayload,
   buildDashscopeRequest,
+  buildGrokVideoRequest,
   handleVideoApiRequest,
   normalizePromptMentions,
   prepareRequestData,
@@ -104,11 +105,11 @@ test('阿里与 Agnes 创建和轮询结果统一为任务状态协议', async (
     if (String(url).includes('/agnesapi?video_id=')) {
       return Response.json({
         task_id: 'agnes-task-12345678',
-        video_id: 'agnes-video-12345678',
-        status: 'completed',
-        progress: 100,
-        url: 'https://platform-outputs.agnes-ai.space/videos/result.mp4',
-        seconds: '5.0',
+      video_id: 'agnes-video-12345678',
+      status: 'completed',
+      progress: 100,
+      metadata: { url: 'https://platform-outputs.agnes-ai.space/videos/result.mp4' },
+      seconds: '5.0',
         size: '1280x720',
       });
     }
@@ -170,6 +171,60 @@ test('阿里与 Agnes 创建和轮询结果统一为任务状态协议', async (
   assert.equal(agnesResult.videoUrl, 'https://platform-outputs.agnes-ai.space/videos/result.mp4');
   assert.equal(agnesResult.seconds, '5.0');
   assert.ok(calls.every((call) => call.options.headers?.Authorization));
+});
+
+test('Sub2API Grok 使用视频任务协议创建并轮询 Grok Imagine Video', async () => {
+  const runtime = memoryRuntime({
+    VIDEO_ACCESS_TOKEN: 'studio-secret',
+    SUB2API_API_KEY: 'sub2api-server-key',
+  });
+  const calls = [];
+  runtime.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith('/videos/generations')) {
+      return Response.json({ request_id: 'grok-request-12345678' });
+    }
+    if (String(url).endsWith('/videos/grok-request-12345678')) {
+      return Response.json({
+        status: 'done',
+        model: 'grok-imagine-video',
+        video: {
+          url: 'https://vidgen.x.ai/videos/result.mp4',
+          duration: 5,
+        },
+      });
+    }
+    return Response.json({ error: { message: 'unexpected request' } }, { status: 500 });
+  };
+  const headers = { authorization: 'Bearer studio-secret', 'content-type': 'application/json' };
+  const created = await handleVideoApiRequest(new Request('https://studio.example/api/videos', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ...BASE_REQUEST, model: 'grok-imagine-video', workflow: 'text-to-video', images: [] }),
+  }), runtime);
+  assert.equal(created.status, 202);
+  assert.deepEqual(await created.json(), {
+    taskId: 'grok-request-12345678',
+    provider: 'sub2api_grok',
+    modelId: 'grok-imagine-video',
+    status: 'PENDING',
+  });
+
+  const createdPayload = JSON.parse(calls[0].options.body);
+  assert.equal(calls[0].url, 'https://ctmoai.com/v1/videos/generations');
+  assert.equal(createdPayload.model, 'grok-imagine-video');
+  assert.equal(createdPayload.aspect_ratio, '16:9');
+  assert.equal(createdPayload.resolution, '720p');
+
+  const statusResponse = await handleVideoApiRequest(new Request(
+    'https://studio.example/api/videos/grok-request-12345678?provider=sub2api_grok',
+    { headers: { authorization: 'Bearer studio-secret' } },
+  ), runtime);
+  const status = await statusResponse.json();
+  assert.equal(status.status, 'SUCCEEDED');
+  assert.equal(status.terminal, true);
+  assert.equal(status.videoUrl, 'https://vidgen.x.ai/videos/result.mp4');
+  assert.equal(status.seconds, 5);
 });
 
 test('公共写入和任务接口默认关闭，并校验访问令牌', async () => {
@@ -272,6 +327,12 @@ test('模型只出现在真实支持的工作流中', () => {
 
   const r2v = getVideoModel('wan2.7-r2v');
   assert.deepEqual(Object.keys(r2v.workflowCapabilities), ['multi-reference']);
+
+  const grok = getVideoModel('grok-imagine-video');
+  assert.equal(grok.provider, 'sub2api_grok');
+  assert.deepEqual(Object.keys(grok.workflowCapabilities), ['text-to-video', 'first-frame', 'multi-reference']);
+  assert.equal(grok.supportsWatermark, false);
+  assert.equal(grok.supportsPromptExtend, false);
 });
 
 test('每个模型的每条工作流都能通过约束并构造请求', () => {
@@ -295,6 +356,9 @@ test('每个模型的每条工作流都能通过约束并构造请求', () => {
       if (model.provider === 'agnes') {
         const urls = data.images.map((item) => item.source);
         assert.equal(buildAgnesPayload(data, urls).model, 'agnes-video-v2.0');
+      } else if (model.provider === 'sub2api_grok') {
+        const urls = data.images.map((item) => item.source);
+        assert.equal(buildGrokVideoRequest(model, data, urls).model, model.id);
       } else {
         const request = buildDashscopeRequest(model, data);
         assert.ok(request.endpoint.startsWith('/api/'), `${model.id} / ${workflow}`);
@@ -315,6 +379,11 @@ test('旧请求可以从模型和素材推断生成方式', () => {
   assert.equal(inferVideoWorkflow(wan27, { images: [image('one')] }), 'first-frame');
   assert.equal(inferVideoWorkflow(wan27, { images: [image('one'), image('two')] }), 'first-last-frame');
   assert.equal(inferVideoWorkflow(wan27, { images: [], videoUrl: 'https://assets.example.com/start.mp4' }), 'video-continuation');
+
+  const grok = getVideoModel('grok-imagine-video');
+  assert.equal(inferVideoWorkflow(grok, { images: [] }), 'text-to-video');
+  assert.equal(inferVideoWorkflow(grok, { images: [image('one')] }), 'first-frame');
+  assert.equal(inferVideoWorkflow(grok, { images: [image('one'), image('two')] }), 'multi-reference');
 });
 
 test('Agnes 文生视频不发送空图片字段', () => {

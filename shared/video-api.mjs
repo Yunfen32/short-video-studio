@@ -9,6 +9,18 @@ import {
 const DEFAULT_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com";
 const AGNES_API_BASE = "https://apihub.agnes-ai.com";
 const AGNES_VIDEO_MODEL = "agnes-video-v2.0";
+const SUB2API_GROK = Object.freeze({
+  provider: "sub2api_grok",
+  name: "Sub2API Grok",
+  baseUrl: "https://ctmoai.com/v1",
+  envKey: "SUB2API_API_KEY",
+  wireApi: "responses",
+  model: "grok-4.5",
+  reviewModel: "grok-4.5",
+  videoModel: "grok-imagine-video",
+  reasoningEffort: "xhigh",
+  contextWindow: 1_000_000,
+});
 const AVAILABILITY_KEY = "state/unavailable-models";
 const MODEL_QUOTA_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const PROVIDER_BILLING_COOLDOWN_MS = 15 * 60 * 1000;
@@ -37,6 +49,10 @@ function runtimeNow(runtime) {
 
 function dashscopeBase(runtime) {
   return (runtimeEnv(runtime, "DASHSCOPE_BASE_URL") || DEFAULT_DASHSCOPE_API_BASE).replace(/\/$/, "");
+}
+
+function sub2apiGrokBase(runtime) {
+  return (runtimeEnv(runtime, "SUB2API_GROK_BASE_URL") || SUB2API_GROK.baseUrl).replace(/\/$/, "");
 }
 
 function upstreamMessage(payload, fallback) {
@@ -529,6 +545,25 @@ export function buildDashscopeRequest(model, data) {
   throw new Error("当前模型协议尚未配置");
 }
 
+function grokResolution(resolution) {
+  return { "480P": "480p", "720P": "720p", "1080P": "1080p" }[resolution] || "480p";
+}
+
+export function buildGrokVideoRequest(model, data, imageUrls) {
+  const prompt = normalizePromptMentions(data.prompt, data.workflow, "Image", data.images);
+  const payload = {
+    model: model.id,
+    prompt,
+    duration: data.duration,
+    aspect_ratio: data.ratio || "16:9",
+    resolution: grokResolution(data.resolution),
+  };
+
+  if (data.workflow === "first-frame") payload.image = imageUrls[0];
+  if (data.workflow === "multi-reference") payload.reference_images = imageUrls;
+  return payload;
+}
+
 function fetchFor(runtime) {
   return runtime?.fetch || globalThis.fetch;
 }
@@ -671,6 +706,31 @@ async function createAgnesVideo(model, body, origin, runtime) {
   }, 202);
 }
 
+async function createGrokVideo(model, body, origin, runtime) {
+  const apiKey = runtimeEnv(runtime, SUB2API_GROK.envKey);
+  if (!apiKey) return json({ error: "Sub2API Grok 视频服务尚未配置" }, 503);
+  const data = prepareRequestData(model, body);
+  const validationError = validateRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+
+  const imageUrls = await Promise.all(data.images.map((item) => publicAgnesImageUrl(item.source, origin, runtime)));
+  const response = await fetchFor(runtime)(`${sub2apiGrokBase(runtime)}/videos/generations`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildGrokVideoRequest(model, data, imageUrls)),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.request_id) {
+    return modelCreationFailure(response, result, model.id, runtime, "Grok 视频任务创建失败");
+  }
+  return json({
+    taskId: result.request_id,
+    provider: "sub2api_grok",
+    modelId: model.id,
+    status: "PENDING",
+  }, 202);
+}
+
 async function createVideo(request, runtime) {
   let body;
   try {
@@ -694,9 +754,10 @@ async function createVideo(request, runtime) {
       unavailableUntil: unavailable[model.id].until,
     }, 429);
   }
-  return model.provider === "agnes"
-    ? createAgnesVideo(model, body, new URL(request.url).origin, runtime)
-    : createDashscopeVideo(model, body, runtime);
+  const origin = new URL(request.url).origin;
+  if (model.provider === "agnes") return createAgnesVideo(model, body, origin, runtime);
+  if (model.provider === "sub2api_grok") return createGrokVideo(model, body, origin, runtime);
+  return createDashscopeVideo(model, body, runtime);
 }
 
 async function getModelAvailability(runtime) {
@@ -799,11 +860,39 @@ async function getAgnesVideo(taskId, videoId, runtime) {
     provider: "agnes",
     status,
     terminal: ["SUCCEEDED", "FAILED", "UNKNOWN"].includes(status),
-    videoUrl: result.url || null,
+    // Agnes returns the completed asset under metadata.url; keep the older
+    // top-level field as a fallback for tasks created by earlier API versions.
+    videoUrl: result.metadata?.url || result.url || null,
     progress: Number.isFinite(Number(result.progress)) ? Number(result.progress) : (status === "SUCCEEDED" ? 100 : null),
     seconds: result.seconds || null,
     size: result.size || null,
     error: status === "FAILED" ? (typeof result.error === "string" ? result.error : result.error?.message || "Agnes 视频生成失败") : null,
+  });
+}
+
+function grokTaskStatus(status) {
+  return { pending: "PENDING", done: "SUCCEEDED", failed: "FAILED", expired: "FAILED" }[status] || "UNKNOWN";
+}
+
+async function getGrokVideo(taskId, runtime) {
+  const apiKey = runtimeEnv(runtime, SUB2API_GROK.envKey);
+  if (!apiKey) return json({ error: "Sub2API Grok 视频服务尚未配置" }, 503);
+  const response = await fetchFor(runtime)(`${sub2apiGrokBase(runtime)}/videos/${encodeURIComponent(taskId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return json({ error: upstreamMessage(result, "Grok 任务状态查询失败") }, response.status || 502);
+  const status = grokTaskStatus(result.status);
+  return json({
+    taskId,
+    provider: "sub2api_grok",
+    status,
+    terminal: ["SUCCEEDED", "FAILED", "UNKNOWN"].includes(status),
+    videoUrl: result.video?.url || result.url || null,
+    progress: status === "SUCCEEDED" ? 100 : status === "PENDING" ? 30 : null,
+    seconds: result.video?.duration ?? result.duration ?? null,
+    size: result.video?.resolution || result.resolution || null,
+    error: status === "FAILED" ? upstreamMessage(result, "Grok 视频生成失败") : null,
   });
 }
 
@@ -869,7 +958,12 @@ function allowedDownloadUrl(value) {
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase();
     return url.protocol === "https:"
-      && (hostname === "aliyuncs.com" || hostname.endsWith(".aliyuncs.com") || hostname === "agnes-ai.space" || hostname.endsWith(".agnes-ai.space"));
+      && (hostname === "aliyuncs.com"
+        || hostname.endsWith(".aliyuncs.com")
+        || hostname === "agnes-ai.space"
+        || hostname.endsWith(".agnes-ai.space")
+        || hostname === "x.ai"
+        || hostname.endsWith(".x.ai"));
   } catch {
     return false;
   }
@@ -927,9 +1021,12 @@ export async function handleVideoApiRequest(request, runtime = {}) {
 
     const taskMatch = url.pathname.match(/^\/api\/videos\/([a-zA-Z0-9_-]+)$/);
     if (taskMatch && request.method === "GET") {
-      return protectedRoute("status", () => url.searchParams.get("provider") === "agnes"
-        ? getAgnesVideo(taskMatch[1], url.searchParams.get("video_id"), runtime)
-        : getDashscopeVideo(taskMatch[1], runtime))();
+      return protectedRoute("status", () => {
+        const provider = url.searchParams.get("provider");
+        if (provider === "agnes") return getAgnesVideo(taskMatch[1], url.searchParams.get("video_id"), runtime);
+        if (provider === "sub2api_grok") return getGrokVideo(taskMatch[1], runtime);
+        return getDashscopeVideo(taskMatch[1], runtime);
+      })();
     }
     return json({ error: "未找到请求的接口" }, 404);
   } catch (error) {

@@ -13,6 +13,7 @@ import {
   Layers3,
   Loader2,
   LockKeyhole,
+  MonitorPlay,
   Play,
   RefreshCw,
   Sparkles,
@@ -57,6 +58,7 @@ import './styles.css';
 const STYLES = ['写实广告', '电影感', '产品展示', '动画短片'];
 const POLL_INTERVAL = Number(import.meta.env.VITE_POLL_INTERVAL) || 15000;
 const MAX_POLL_RETRIES = 3;
+const DEMO_VIDEO_URL = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
 const GROUP_ICONS = {
   text: Type,
   image: ImageIcon,
@@ -198,12 +200,15 @@ function App() {
   const [accessRequired, setAccessRequired] = useState(true);
   const [accessConfigured, setAccessConfigured] = useState(true);
   const [accessToken, setAccessToken] = useState(() => window.sessionStorage.getItem('video-access-token') || '');
+  const [demoMode, setDemoMode] = useState(() => window.localStorage.getItem('video-demo-mode') === 'true');
   const [downloading, setDownloading] = useState(false);
   const videoRef = useRef(null);
   const promptRef = useRef(null);
   const activeTaskRef = useRef(0);
   const activeUploadRef = useRef(0);
   const pollTimerRef = useRef(0);
+  const demoTimersRef = useRef([]);
+  const localImageUrlsRef = useRef(new Set());
 
   const taskStatus = task.status;
   const taskId = task.taskId;
@@ -262,8 +267,8 @@ function App() {
   ));
 
   function readinessMessage() {
-    if (accessRequired && !accessConfigured) return '服务端尚未配置接口访问密钥';
-    if (accessRequired && !accessToken.trim()) return '请输入接口访问密钥';
+    if (!demoMode && accessRequired && !accessConfigured) return '服务端尚未配置接口访问密钥';
+    if (!demoMode && accessRequired && !accessToken.trim()) return '请输入接口访问密钥';
     if (!selectedModel) return '当前生成方式暂无可用模型';
     if (uploadingCount > 0) return '图片正在上传';
     if (!selectedCapability.promptOptional && !prompt.trim()) return '请填写视频描述';
@@ -309,7 +314,7 @@ function App() {
       setAccessRequired(data.accessRequired !== false);
       setAccessConfigured(data.accessConfigured !== false);
     } catch {
-      // Keep the local catalog usable if the availability service is temporarily unreachable.
+      setAccessConfigured(false);
     } finally {
       setAvailabilityLoading(false);
     }
@@ -321,6 +326,8 @@ function App() {
     return () => {
       window.clearInterval(timer);
       if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
+      demoTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      localImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
 
@@ -328,6 +335,10 @@ function App() {
     if (accessToken) window.sessionStorage.setItem('video-access-token', accessToken);
     else window.sessionStorage.removeItem('video-access-token');
   }, [accessToken]);
+
+  useEffect(() => {
+    window.localStorage.setItem('video-demo-mode', String(demoMode));
+  }, [demoMode]);
 
   const workflowModelIds = workflowModels.map((item) => item.id).join('|');
   useEffect(() => {
@@ -368,10 +379,27 @@ function App() {
     setUploadingCount(0);
   }
 
+  function clearDemoTimers() {
+    demoTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    demoTimersRef.current = [];
+  }
+
+  function releaseLocalImages(items = images) {
+    items.forEach((image) => {
+      if (localImageUrlsRef.current.delete(image.source)) URL.revokeObjectURL(image.source);
+    });
+  }
+
+  function clearImages() {
+    releaseLocalImages();
+    setImages([]);
+  }
+
   function invalidateTask() {
     activeTaskRef.current += 1;
     if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
     pollTimerRef.current = 0;
+    clearDemoTimers();
     dispatchTask({ type: 'reset', token: activeTaskRef.current });
   }
 
@@ -382,7 +410,7 @@ function App() {
     setWorkflowId(nextWorkflowId);
     if (nextModel) setModelId(nextModel.id);
     setPrompt((current) => stripImageMentions(current));
-    setImages([]);
+    clearImages();
     setAudioUrl('');
     setVideoInputUrl('');
     setMention(null);
@@ -405,6 +433,7 @@ function App() {
     if (images.length > nextCapability.imageMax) {
       const before = images;
       const after = normalizeImageRoles(images.slice(0, nextCapability.imageMax), workflowId);
+      releaseLocalImages(images.slice(nextCapability.imageMax));
       setPrompt((current) => remapImageMentions(current, workflowId, before, after));
       setImages(after);
       setError('该变体最多使用 ' + nextCapability.imageMax + ' 张图片，已保留前面的素材');
@@ -453,6 +482,21 @@ function App() {
       return;
     }
 
+    if (demoMode) {
+      const additions = selected.map((file, index) => {
+        const source = URL.createObjectURL(file);
+        localImageUrlsRef.current.add(source);
+        return {
+          id: Date.now().toString(36) + '-' + index + '-' + Math.random().toString(36).slice(2),
+          source,
+          role: defaultImageRole(workflowId, images.length + index, 'character'),
+        };
+      });
+      setImages((current) => normalizeImageRoles([...current, ...additions].slice(0, imageLimit), workflowId));
+      setError(files.length > available ? '当前生成方式最多使用 ' + imageLimit + ' 张图片' : '');
+      return;
+    }
+
     const uploadToken = activeUploadRef.current + 1;
     activeUploadRef.current = uploadToken;
     try {
@@ -478,6 +522,7 @@ function App() {
 
   function removeImage(index) {
     const before = images;
+    releaseLocalImages([images[index]]);
     const after = normalizeImageRoles(images.filter((_, itemIndex) => itemIndex !== index), workflowId);
     setPrompt((current) => remapImageMentions(current, workflowId, before, after));
     setImages(after);
@@ -489,6 +534,15 @@ function App() {
     const after = images.map((image, itemIndex) => itemIndex === index ? { ...image, role } : image);
     setPrompt((current) => remapImageMentions(current, workflowId, before, after));
     setImages(after);
+  }
+
+  function setDemoEnabled(nextDemoMode) {
+    if (!nextDemoMode) {
+      clearImages();
+      setPrompt((current) => stripImageMentions(current));
+    }
+    setError('');
+    setDemoMode(nextDemoMode);
   }
 
   function schedulePoll(callback, delay = POLL_INTERVAL) {
@@ -541,7 +595,73 @@ function App() {
     schedulePoll(() => pollTask(nextTaskId, taskToken, provider, videoId, 0));
   }
 
+  function generateDemoVideo() {
+    if (!canGenerate) {
+      setError(missingRequirement || '当前任务正在生成');
+      return;
+    }
+
+    setError('');
+    clearDemoTimers();
+    const taskToken = activeTaskRef.current + 1;
+    activeTaskRef.current = taskToken;
+    const submittedPrompt = composeVideoPrompt(prompt, style);
+    const snapshot = createTaskSnapshot({
+      workflowId,
+      workflowLabel: currentWorkflow?.label,
+      modelId: selectedModel.id,
+      modelLabel: selectedModel.label,
+      familyLabel: selectedModel.familyLabel,
+      variantLabel: selectedModel.variantLabel,
+      provider: selectedModel.provider,
+      ratio: selectedCapability.ratioOptions.includes(ratio) ? ratio : '',
+      resolution,
+      duration,
+      durationMode: selectedCapability.durationMode,
+      routeInput,
+      prompt: submittedPrompt,
+      isDemo: true,
+    });
+    const taskId = 'demo-' + Date.now().toString(36);
+    dispatchTask({ type: 'start', token: taskToken, snapshot });
+
+    const scheduleDemoStep = (delay, action) => {
+      const timerId = window.setTimeout(() => {
+        demoTimersRef.current = demoTimersRef.current.filter((id) => id !== timerId);
+        if (activeTaskRef.current === taskToken) action();
+      }, delay);
+      demoTimersRef.current.push(timerId);
+    };
+
+    scheduleDemoStep(220, () => dispatchTask({
+      type: 'created',
+      token: taskToken,
+      taskId,
+      provider: 'demo',
+      status: 'PENDING',
+    }));
+    scheduleDemoStep(720, () => dispatchTask({
+      type: 'polled',
+      token: taskToken,
+      status: 'RUNNING',
+      progress: 62,
+    }));
+    scheduleDemoStep(1500, () => dispatchTask({
+      type: 'polled',
+      token: taskToken,
+      status: 'SUCCEEDED',
+      progress: 100,
+      videoUrl: DEMO_VIDEO_URL,
+      size: resolution,
+      seconds: selectedCapability.durationMode === 'source' ? 5 : duration,
+    }));
+  }
+
   async function generateVideo() {
+    if (demoMode) {
+      generateDemoVideo();
+      return;
+    }
     if (!canGenerate) {
       setError(missingRequirement || '当前任务正在生成');
       return;
@@ -622,7 +742,7 @@ function App() {
     invalidateUploads();
     setPrompt('');
     setMention(null);
-    setImages([]);
+    clearImages();
     setAudioUrl('');
     setVideoInputUrl('');
     setNegativePrompt('');
@@ -634,6 +754,17 @@ function App() {
 
   async function downloadVideo() {
     if (!videoUrl || downloading) return;
+    if (task.snapshot?.isDemo) {
+      const anchor = document.createElement('a');
+      anchor.href = videoUrl;
+      anchor.download = 'portfolio-demo-video.mp4';
+      anchor.target = '_blank';
+      anchor.rel = 'noreferrer';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      return;
+    }
     setDownloading(true);
     setError('');
     try {
@@ -684,6 +815,7 @@ function App() {
     ? outputDurationLabel(selectedCapability.durationMode, duration) + ' / ' + resolution
     : '--';
   const previewSnapshot = task.snapshot;
+  const isDemoTask = Boolean(previewSnapshot?.isDemo);
   const previewWorkflowLabel = previewSnapshot?.workflowLabel || currentWorkflow?.label || '--';
   const previewModelLabel = previewSnapshot?.modelLabel || selectedModel?.label || '暂无可用模型';
   const previewVariantLabel = previewSnapshot?.variantLabel || selectedModel?.variantLabel || '--';
@@ -705,17 +837,37 @@ function App() {
           <p>阿里云百炼 + Agnes AI</p>
           <h1>视频生成工作台</h1>
         </div>
-        <div className="service-metrics" aria-label="模型服务状态">
-          <div><span>可用变体</span><strong>{availableModels.length}</strong></div>
-          <div><span>额度暂停</span><strong>{unavailableModels.length}</strong></div>
-          <div className={'status-strip ' + (taskStatus === 'FAILED' ? 'error' : '')}>
-            <span>{statusLabels[taskStatus] || taskStatus}</span>
-            <strong>{String(progress).padStart(3, '0')}%</strong>
+        <div className="topbar-controls">
+          <button
+            type="button"
+            className={'mode-toggle ' + (demoMode ? 'active' : '')}
+            onClick={() => setDemoEnabled(!demoMode)}
+            title={demoMode ? '切换至真实服务' : '切换至演示模式'}
+            disabled={isGenerating}
+          >
+            <MonitorPlay size={16} />
+            <span>{demoMode ? '演示模式' : '真实服务'}</span>
+          </button>
+          <div className="service-metrics" aria-label="模型服务状态">
+            <div><span>可用变体</span><strong>{availableModels.length}</strong></div>
+            <div><span>额度暂停</span><strong>{unavailableModels.length}</strong></div>
+            <div className={'status-strip ' + (taskStatus === 'FAILED' ? 'error' : '')}>
+              <span>{statusLabels[taskStatus] || taskStatus}</span>
+              <strong>{String(progress).padStart(3, '0')}%</strong>
+            </div>
           </div>
         </div>
       </header>
 
-      {accessRequired && (
+      {demoMode && (
+        <section className="demo-strip" aria-label="演示模式状态">
+          <MonitorPlay size={17} />
+          <span>演示任务不会调用模型服务或消耗额度</span>
+          <button type="button" onClick={() => setDemoEnabled(false)} disabled={isGenerating}>使用真实服务</button>
+        </section>
+      )}
+
+      {accessRequired && !demoMode && (
         <section className={'access-strip ' + (!accessConfigured ? 'error' : '')} aria-label="接口访问保护">
           <LockKeyhole size={17} />
           <label>
@@ -732,7 +884,7 @@ function App() {
               data-testid="access-token"
             />
           </label>
-          <strong>{accessConfigured ? (accessToken ? '已填写' : '等待输入') : '服务端未配置'}</strong>
+          <strong>{accessConfigured ? (accessToken ? '已填写' : '等待输入') : '服务不可用'}</strong>
         </section>
       )}
 
@@ -1060,7 +1212,7 @@ function App() {
             <div className="primary-action-wrap">
               <button className="primary-action" onClick={generateVideo} disabled={!canGenerate} data-testid="generate-video">
                 {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
-                {isGenerating ? '正在生成' : '生成视频'}
+                {isGenerating ? '正在生成' : (demoMode ? '演示生成' : '生成视频')}
               </button>
               <p className={missingRequirement ? 'action-note warning' : 'action-note ready'}>
                 {isGenerating ? '任务已提交，可在右侧查看状态' : (missingRequirement || '输入完整，可以生成')}
@@ -1075,7 +1227,7 @@ function App() {
             <div className="panel-heading"><Film size={18} /><div><h2>生成结果</h2><span>{previewWorkflowLabel}</span></div></div>
             <div className="preview-model-state" data-testid="preview-model">
               {availabilityLoading ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
-              <span>{previewModelLabel}</span>
+              <span>{isDemoTask ? '演示 · ' : ''}{previewModelLabel}</span>
             </div>
             <div className="toolbar-actions">
               <button className="icon-action" onClick={togglePlayback} disabled={!videoUrl} aria-label="播放或暂停"><Play size={18} /></button>
