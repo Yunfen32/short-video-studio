@@ -1,4 +1,4 @@
-import { handleVideoApiRequest } from "../shared/video-api.mjs";
+import { handleVideoApiRequest } from "./shared/video-api.mjs";
 
 function assetRequest(request, pathname) {
   const url = new URL(request.url);

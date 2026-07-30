@@ -58,9 +58,12 @@ export const config = {
     "/api/models",
     "/api/videos",
     "/api/videos/:taskId",
+    "/api/images",
+    "/api/images/:taskId",
     "/api/reference-images",
     "/api/reference-images/:key",
     "/api/reference-images/*",
     "/api/video-download",
+    "/api/image-download",
   ],
 };

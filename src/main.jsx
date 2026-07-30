@@ -12,7 +12,6 @@ import {
   ImagePlus,
   Layers3,
   Loader2,
-  LockKeyhole,
   MonitorPlay,
   Play,
   RefreshCw,
@@ -54,6 +53,7 @@ import {
   stripImageMentions,
 } from './video-ui-state.mjs';
 import './styles.css';
+import ImageStudio from './image-studio.jsx';
 
 const STYLES = ['写实广告', '电影感', '产品展示', '动画短片'];
 const POLL_INTERVAL = Number(import.meta.env.VITE_POLL_INTERVAL) || 15000;
@@ -66,17 +66,14 @@ const GROUP_ICONS = {
   video: Clapperboard,
 };
 
-function authorizedHeaders(headers = {}, accessToken = '') {
-  return {
-    ...headers,
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-  };
+function authorizedHeaders(headers = {}) {
+  return headers;
 }
 
-async function apiRequest(url, options = {}, accessToken = '') {
+async function apiRequest(url, options = {}) {
   const response = await fetch(url, {
     ...options,
-    headers: authorizedHeaders(options.headers, accessToken),
+    headers: authorizedHeaders(options.headers),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -90,10 +87,10 @@ async function apiRequest(url, options = {}, accessToken = '') {
   return data;
 }
 
-async function uploadReferenceImage(file, accessToken) {
+async function uploadReferenceImage(file) {
   const response = await fetch('/api/reference-images', {
     method: 'POST',
-    headers: authorizedHeaders({ 'Content-Type': file.type }, accessToken),
+    headers: authorizedHeaders({ 'Content-Type': file.type }),
     body: file,
   });
   const data = await response.json().catch(() => ({}));
@@ -174,7 +171,7 @@ function audioFieldLabel(capability) {
   return '音频输入 URL（可选）';
 }
 
-function App() {
+function VideoStudio({ onOpenImage }) {
   const [workflowId, setWorkflowId] = useState('text-to-video');
   const [modelId, setModelId] = useState('wan2.7-t2v');
   const [prompt, setPrompt] = useState('');
@@ -197,10 +194,7 @@ function App() {
   const [mention, setMention] = useState(null);
   const [unavailableModels, setUnavailableModels] = useState([]);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
-  const [accessRequired, setAccessRequired] = useState(true);
-  const [accessConfigured, setAccessConfigured] = useState(true);
-  const [accessToken, setAccessToken] = useState(() => window.sessionStorage.getItem('video-access-token') || '');
-  const [demoMode, setDemoMode] = useState(() => window.localStorage.getItem('video-demo-mode') === 'true');
+  const [demoMode, setDemoMode] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const videoRef = useRef(null);
   const promptRef = useRef(null);
@@ -267,8 +261,6 @@ function App() {
   ));
 
   function readinessMessage() {
-    if (!demoMode && accessRequired && !accessConfigured) return '服务端尚未配置接口访问密钥';
-    if (!demoMode && accessRequired && !accessToken.trim()) return '请输入接口访问密钥';
     if (!selectedModel) return '当前生成方式暂无可用模型';
     if (uploadingCount > 0) return '图片正在上传';
     if (!selectedCapability.promptOptional && !prompt.trim()) return '请填写视频描述';
@@ -311,10 +303,8 @@ function App() {
     try {
       const data = await apiRequest('/api/models');
       setUnavailableModels(Array.isArray(data.unavailable) ? data.unavailable : []);
-      setAccessRequired(data.accessRequired !== false);
-      setAccessConfigured(data.accessConfigured !== false);
     } catch {
-      setAccessConfigured(false);
+      // The generation request exposes a server error only when the service is unavailable.
     } finally {
       setAvailabilityLoading(false);
     }
@@ -330,11 +320,6 @@ function App() {
       localImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
-
-  useEffect(() => {
-    if (accessToken) window.sessionStorage.setItem('video-access-token', accessToken);
-    else window.sessionStorage.removeItem('video-access-token');
-  }, [accessToken]);
 
   useEffect(() => {
     window.localStorage.setItem('video-demo-mode', String(demoMode));
@@ -501,7 +486,7 @@ function App() {
     activeUploadRef.current = uploadToken;
     try {
       setUploadingCount(selected.length);
-      const uploaded = await Promise.all(selected.map((file) => uploadReferenceImage(file, accessToken.trim())));
+      const uploaded = await Promise.all(selected.map((file) => uploadReferenceImage(file)));
       if (activeUploadRef.current !== uploadToken) return;
       setImages((current) => {
         const startIndex = current.length;
@@ -560,7 +545,6 @@ function App() {
       data = await apiRequest(
         '/api/videos/' + encodeURIComponent(nextTaskId) + '?' + query,
         {},
-        accessToken.trim(),
       );
     } catch (pollError) {
       if (activeTaskRef.current !== taskToken) return;
@@ -710,7 +694,7 @@ function App() {
           animationMode,
           audioSetting,
         }),
-      }, accessToken.trim());
+      });
       if (activeTaskRef.current !== taskToken) return;
       dispatchTask({
         type: 'created',
@@ -769,7 +753,7 @@ function App() {
     setError('');
     try {
       const response = await fetch('/api/video-download?url=' + encodeURIComponent(videoUrl), {
-        headers: authorizedHeaders({}, accessToken.trim()),
+        headers: authorizedHeaders({}),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -838,6 +822,10 @@ function App() {
           <h1>视频生成工作台</h1>
         </div>
         <div className="topbar-controls">
+          <div className="studio-switch" role="tablist" aria-label="创作类型">
+            <button type="button" className="active" role="tab" aria-selected="true"><Video size={16} /><span>视频</span></button>
+            <button type="button" onClick={onOpenImage} role="tab" aria-selected="false"><ImageIcon size={16} /><span>图片</span></button>
+          </div>
           <button
             type="button"
             className={'mode-toggle ' + (demoMode ? 'active' : '')}
@@ -864,27 +852,6 @@ function App() {
           <MonitorPlay size={17} />
           <span>演示任务不会调用模型服务或消耗额度</span>
           <button type="button" onClick={() => setDemoEnabled(false)} disabled={isGenerating}>使用真实服务</button>
-        </section>
-      )}
-
-      {accessRequired && !demoMode && (
-        <section className={'access-strip ' + (!accessConfigured ? 'error' : '')} aria-label="接口访问保护">
-          <LockKeyhole size={17} />
-          <label>
-            <span>接口访问密钥</span>
-            <input
-              type="password"
-              value={accessToken}
-              onChange={(event) => {
-                setAccessToken(event.target.value);
-                setError('');
-              }}
-              autoComplete="current-password"
-              placeholder="输入访问密钥"
-              data-testid="access-token"
-            />
-          </label>
-          <strong>{accessConfigured ? (accessToken ? '已填写' : '等待输入') : '服务不可用'}</strong>
         </section>
       )}
 
@@ -1269,6 +1236,12 @@ function App() {
       </section>
     </main>
   );
+}
+
+function App() {
+  const [studio, setStudio] = useState('video');
+  if (studio === 'image') return <ImageStudio onOpenVideo={() => setStudio('video')} />;
+  return <VideoStudio onOpenImage={() => setStudio('image')} />;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

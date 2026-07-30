@@ -253,6 +253,25 @@ test('公共写入和任务接口默认关闭，并校验访问令牌', async ()
   assert.match((await acceptedToken.json()).error, /阿里视频服务尚未配置/);
 });
 
+test('公开演示模式会优先于旧访问令牌，但仍通过统一的限流路径', async () => {
+  const runtime = memoryRuntime({
+    VIDEO_ACCESS_DISABLED: 'true',
+    VIDEO_ACCESS_TOKEN: 'legacy-studio-secret',
+  });
+  const models = await handleVideoApiRequest(new Request('https://studio.example/api/models'), runtime);
+  const availability = await models.json();
+  assert.equal(models.status, 200);
+  assert.equal(availability.accessRequired, false);
+  assert.equal(availability.directAccess, true);
+
+  const upload = await handleVideoApiRequest(new Request('https://studio.example/api/reference-images', {
+    method: 'POST',
+    headers: { 'content-type': 'image/png' },
+    body: new Uint8Array([137, 80, 78, 71]),
+  }), runtime);
+  assert.equal(upload.status, 201);
+});
+
 test('上传、生成和下载分别限流，参考图只允许受控写入', async () => {
   const runtime = memoryRuntime({
     VIDEO_ACCESS_TOKEN: 'studio-secret',
@@ -284,6 +303,18 @@ test('上传、生成和下载分别限流，参考图只允许受控写入', as
     { headers: { authorization: 'Bearer studio-secret' } },
   ), runtime);
   assert.equal(blockedDownload.status, 400);
+});
+
+test('本地服务可将上传参考图内嵌到真实模型请求中', async () => {
+  const runtime = memoryRuntime({ VIDEO_ACCESS_TOKEN: 'studio-secret' });
+  runtime.inlineReferenceImages = true;
+  const response = await handleVideoApiRequest(new Request('http://127.0.0.1:5173/api/reference-images', {
+    method: 'POST',
+    headers: { authorization: 'Bearer studio-secret', 'content-type': 'image/png' },
+    body: new Uint8Array([137, 80, 78, 71]),
+  }), runtime);
+  assert.equal(response.status, 201);
+  assert.equal((await response.json()).url, 'data:image/png;base64,iVBORw==');
 });
 
 test('Base64 参考图执行 4MB 上限，公开图片在 24 小时后失效', async () => {

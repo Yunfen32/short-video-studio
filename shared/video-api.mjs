@@ -5,6 +5,12 @@ import {
   supportsWorkflow,
   VIDEO_MODELS,
 } from "./video-models.mjs";
+import {
+  getImageModel,
+  inferImageWorkflow,
+  IMAGE_MODELS,
+  supportsImageWorkflow,
+} from "./image-models.mjs";
 
 const DEFAULT_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com";
 const AGNES_API_BASE = "https://apihub.agnes-ai.com";
@@ -144,6 +150,15 @@ function decodeBase64(encoded) {
   if (typeof Buffer !== "undefined") return Uint8Array.from(Buffer.from(encoded, "base64"));
   const binary = atob(encoded);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function encodeBase64(bytes) {
+  if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }
 
 async function publicAgnesImageUrl(source, origin, runtime) {
@@ -760,21 +775,152 @@ async function createVideo(request, runtime) {
   return createDashscopeVideo(model, body, runtime);
 }
 
+function parseImageRequest(body) {
+  return {
+    workflow: typeof body.workflow === "string" ? body.workflow.trim() : "",
+    prompt: typeof body.prompt === "string" ? body.prompt.trim() : "",
+    images: Array.isArray(body.images)
+      ? body.images.map((item) => typeof item === "string" ? item.trim() : String(item?.source || "").trim()).filter(Boolean)
+      : [],
+    quality: typeof body.quality === "string" ? body.quality : "2K",
+    count: Number(body.count) || 1,
+    watermark: Boolean(body.watermark),
+  };
+}
+
+export function prepareImageRequest(model, body) {
+  const data = parseImageRequest(body);
+  data.workflow = data.workflow || inferImageWorkflow(data);
+  return data;
+}
+
+export function validateImageRequest(model, data) {
+  if (!data.prompt) return "请填写图片描述";
+  if (data.prompt.length > 5000) return "图片描述不能超过 5000 个字符";
+  if (!supportsImageWorkflow(model, data.workflow)) return "当前模型不支持所选图片生成方式";
+  if (!model.qualities.includes(data.quality)) return "当前模型不支持所选清晰度";
+  if (!Number.isInteger(data.count) || data.count < 1 || data.count > model.maxOutputs) {
+    return `一次可生成 1-${model.maxOutputs} 张图片`;
+  }
+  const imageLimit = data.workflow === "image-edit" ? 9 : 0;
+  if (data.images.length > imageLimit) return `当前生成方式最多使用 ${imageLimit} 张参考图`;
+  if (data.workflow === "image-edit" && !data.images.length) return "请上传至少 1 张参考图";
+  if (data.images.some((source) => !validImageSource(source))) return "参考图仅支持 HTTPS 地址或 4MB 以内的 JPG、PNG、WEBP 图片";
+  if (data.workflow === "image-edit" && data.quality === "4K") return "参考图编辑最高支持 2K";
+  return null;
+}
+
+export function buildDashscopeImageRequest(model, data) {
+  return {
+    endpoint: "/api/v1/services/aigc/image-generation/generation",
+    payload: {
+      model: model.id,
+      input: {
+        messages: [{
+          role: "user",
+          content: [
+            ...data.images.map((image) => ({ image })),
+            { text: data.prompt },
+          ],
+        }],
+      },
+      parameters: {
+        size: data.quality,
+        n: data.count,
+        watermark: data.watermark,
+      },
+    },
+  };
+}
+
+async function imageCreationFailure(response, result, modelId, runtime) {
+  const message = upstreamMessage(result, "图片任务创建失败");
+  const scope = quotaFailureScope(response, result);
+  if (!scope) return json({ error: message }, response.status || 502);
+
+  const model = getImageModel(modelId);
+  const modelIds = scope === "provider"
+    ? IMAGE_MODELS.filter((item) => item.provider === model?.provider).map((item) => item.id)
+    : [modelId];
+  const cooldownMs = scope === "provider" ? PROVIDER_BILLING_COOLDOWN_MS : MODEL_QUOTA_COOLDOWN_MS;
+  let unavailable = modelIds.map((item) => ({ modelId: item, reason: message, until: runtimeNow(runtime) + cooldownMs, scope }));
+  try {
+    unavailable = await markModelsUnavailable(runtime, modelIds, message, cooldownMs, scope);
+  } catch {
+    // Preserve the upstream error even when persistent model availability is unavailable.
+  }
+  return json({
+    error: message,
+    modelUnavailable: true,
+    modelId,
+    unavailableUntil: unavailable.find((item) => item.modelId === modelId)?.until,
+    unavailable,
+  }, response.status || 429);
+}
+
+async function createImage(request, runtime) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "请求内容不是有效的 JSON" }, 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "请求内容必须是 JSON 对象" }, 400);
+  const model = getImageModel(body.model);
+  if (!model) return json({ error: "不支持该图片模型" }, 400);
+
+  const unavailable = await readUnavailableModels(runtime);
+  if (unavailable[model.id]) {
+    return json({
+      error: "该模型额度暂不可用，已从模型列表移除",
+      modelUnavailable: true,
+      modelId: model.id,
+      unavailableUntil: unavailable[model.id].until,
+    }, 429);
+  }
+  const apiKey = runtimeEnv(runtime, "DASHSCOPE_API_KEY");
+  if (!apiKey) return json({ error: "阿里图片服务尚未配置" }, 503);
+
+  const data = prepareImageRequest(model, body);
+  const validationError = validateImageRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+  const { endpoint, payload } = buildDashscopeImageRequest(model, data);
+  const response = await fetchFor(runtime)(`${dashscopeBase(runtime)}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "X-DashScope-Async": "enable",
+    },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result?.output?.task_id) return imageCreationFailure(response, result, model.id, runtime);
+  return json({
+    taskId: result.output.task_id,
+    provider: "dashscope",
+    modelId: model.id,
+    status: result.output.task_status || "PENDING",
+  }, 202);
+}
+
 async function getModelAvailability(runtime) {
   const unavailable = await readUnavailableModels(runtime);
   const unavailableCount = VIDEO_MODELS.filter((model) => unavailable[model.id]).length;
+  const unavailableImageCount = IMAGE_MODELS.filter((model) => unavailable[model.id]).length;
   const accessDisabled = runtimeEnv(runtime, "VIDEO_ACCESS_DISABLED") === "true";
   return json({
     availableCount: VIDEO_MODELS.length - unavailableCount,
+    imageAvailableCount: IMAGE_MODELS.length - unavailableImageCount,
     unavailable: Object.entries(unavailable).map(([modelId, item]) => ({ modelId, ...item })),
     accessRequired: !accessDisabled,
     accessConfigured: accessDisabled || Boolean(runtimeEnv(runtime, "VIDEO_ACCESS_TOKEN")),
+    directAccess: accessDisabled,
     checkedAt: runtimeNow(runtime),
   });
 }
 
 async function uploadReferenceImage(request, runtime) {
-  if (!runtime?.storage) return json({ error: "图片存储尚未配置" }, 503);
   const contentType = (request.headers.get("content-type") || "").split(";")[0].toLowerCase();
   if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
     return json({ error: "参考图仅支持 JPG、PNG 或 WEBP" }, 415);
@@ -783,6 +929,10 @@ async function uploadReferenceImage(request, runtime) {
   if (!image.byteLength || image.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
     return json({ error: "参考图大小需在 4MB 以内" }, 413);
   }
+  if (runtime?.inlineReferenceImages) {
+    return json({ url: `data:${contentType};base64,${encodeBase64(new Uint8Array(image))}` }, 201);
+  }
+  if (!runtime?.storage) return json({ error: "图片存储尚未配置" }, 503);
   const key = `uploads/${crypto.randomUUID()}.${referenceImageExtension(contentType)}`;
   await runtime.storage.put(key, image, {
     contentType,
@@ -841,6 +991,36 @@ async function getDashscopeVideo(taskId, runtime) {
     seconds: result?.usage?.output_video_duration ?? result?.usage?.duration ?? null,
     size: result?.usage?.size || null,
     error: status === "FAILED" ? (output.message || result.message || "视频生成失败") : null,
+  });
+}
+
+function imageUrlsFromOutput(output) {
+  const legacy = Array.isArray(output?.results) ? output.results.map((item) => item?.url).filter(Boolean) : [];
+  const choices = Array.isArray(output?.choices)
+    ? output.choices.flatMap((choice) => choice?.message?.content || []).map((item) => item?.image).filter(Boolean)
+    : [];
+  return [...new Set([...legacy, ...choices])];
+}
+
+async function getDashscopeImage(taskId, runtime) {
+  const apiKey = runtimeEnv(runtime, "DASHSCOPE_API_KEY");
+  if (!apiKey) return json({ error: "阿里图片服务尚未配置" }, 503);
+  const response = await fetchFor(runtime)(`${dashscopeBase(runtime)}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const result = await response.json().catch(() => ({}));
+  const output = result?.output || {};
+  if (!response.ok) return json({ error: upstreamMessage(result, "图片任务状态查询失败") }, response.status || 502);
+  const status = output.task_status || "UNKNOWN";
+  return json({
+    taskId,
+    provider: "dashscope",
+    status,
+    terminal: TERMINAL_STATUSES.has(status),
+    imageUrls: status === "SUCCEEDED" ? imageUrlsFromOutput(output) : [],
+    progress: status === "SUCCEEDED" ? 100 : status === "RUNNING" ? 58 : 12,
+    size: result?.usage?.size || null,
+    error: status === "FAILED" ? (output.message || result.message || "图片生成失败") : null,
   });
 }
 
@@ -910,9 +1090,9 @@ function sameSecret(left, right) {
 }
 
 function authorizeRequest(request, runtime) {
+  if (runtimeEnv(runtime, "VIDEO_ACCESS_DISABLED") === "true") return null;
   const expected = runtimeEnv(runtime, "VIDEO_ACCESS_TOKEN");
   if (!expected) {
-    if (runtimeEnv(runtime, "VIDEO_ACCESS_DISABLED") === "true") return null;
     return json({
       error: "接口访问保护尚未配置，请设置 VIDEO_ACCESS_TOKEN",
       accessRequired: true,
@@ -993,6 +1173,21 @@ async function downloadVideo(request, runtime) {
   });
 }
 
+async function downloadImage(request, runtime) {
+  const source = new URL(request.url).searchParams.get("url") || "";
+  if (!allowedDownloadUrl(source)) return json({ error: "图片下载地址无效" }, 400);
+  const response = await fetchDownload(source, runtime);
+  if (!response.ok || !response.body) return json({ error: "图片下载失败" }, response.status || 502);
+  return new Response(response.body, {
+    headers: {
+      "cache-control": "private, no-store",
+      "content-disposition": 'attachment; filename="generated-image.png"',
+      "content-type": response.headers.get("content-type") || "image/png",
+      ...(response.headers.get("content-length") ? { "content-length": response.headers.get("content-length") } : {}),
+    },
+  });
+}
+
 export async function handleVideoApiRequest(request, runtime = {}) {
   const url = new URL(request.url);
   try {
@@ -1015,8 +1210,14 @@ export async function handleVideoApiRequest(request, runtime = {}) {
     if (url.pathname === "/api/videos" && request.method === "POST") {
       return protectedRoute("create", () => createVideo(request, runtime))();
     }
+    if (url.pathname === "/api/images" && request.method === "POST") {
+      return protectedRoute("create", () => createImage(request, runtime))();
+    }
     if (url.pathname === "/api/video-download" && request.method === "GET") {
       return protectedRoute("download", () => downloadVideo(request, runtime))();
+    }
+    if (url.pathname === "/api/image-download" && request.method === "GET") {
+      return protectedRoute("download", () => downloadImage(request, runtime))();
     }
 
     const taskMatch = url.pathname.match(/^\/api\/videos\/([a-zA-Z0-9_-]+)$/);
@@ -1027,6 +1228,10 @@ export async function handleVideoApiRequest(request, runtime = {}) {
         if (provider === "sub2api_grok") return getGrokVideo(taskMatch[1], runtime);
         return getDashscopeVideo(taskMatch[1], runtime);
       })();
+    }
+    const imageTaskMatch = url.pathname.match(/^\/api\/images\/([a-zA-Z0-9_-]+)$/);
+    if (imageTaskMatch && request.method === "GET") {
+      return protectedRoute("status", () => getDashscopeImage(imageTaskMatch[1], runtime))();
     }
     return json({ error: "未找到请求的接口" }, 404);
   } catch (error) {

@@ -3,14 +3,15 @@ import { Readable } from 'node:stream';
 
 const port = Number(process.env.BROWSER_FIXTURE_PORT) || 4174;
 const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://127.0.0.1:4173';
-const accessToken = 'browser-test-token';
 const pixel = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP8z8DAwMDAxMDAwMAAAAsAAQFhY7sAAAAASUVORK5CYII=',
   'base64',
 );
 let uploadCount = 0;
 let pollCount = 0;
+let imagePollCount = 0;
 let lastVideoRequest = null;
+let lastImageRequest = null;
 
 function json(response, data, status = 200) {
   response.writeHead(status, {
@@ -18,10 +19,6 @@ function json(response, data, status = 200) {
     'content-type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(data));
-}
-
-function authorized(request) {
-  return request.headers.authorization === `Bearer ${accessToken}`;
 }
 
 async function readJson(request) {
@@ -36,14 +33,15 @@ const server = http.createServer(async (request, response) => {
     json(response, {
       availableCount: 34,
       unavailable: [],
-      accessRequired: true,
+      accessRequired: false,
       accessConfigured: true,
+      directAccess: true,
       checkedAt: Date.now(),
     });
     return;
   }
   if (url.pathname === '/__test__/state') {
-    json(response, { pollCount, lastVideoRequest });
+    json(response, { pollCount, imagePollCount, lastVideoRequest, lastImageRequest });
     return;
   }
   if (url.pathname.startsWith('/mock/image-')) {
@@ -56,8 +54,9 @@ const server = http.createServer(async (request, response) => {
     response.end();
     return;
   }
-  if (url.pathname.startsWith('/api/') && !authorized(request)) {
-    json(response, { error: '接口访问密钥无效或缺失', accessRequired: true }, 401);
+  if (url.pathname === '/mock/result.png') {
+    response.writeHead(200, { 'content-type': 'image/png' });
+    response.end(pixel);
     return;
   }
   if (url.pathname === '/api/reference-images' && request.method === 'POST') {
@@ -80,6 +79,17 @@ const server = http.createServer(async (request, response) => {
     }, 202);
     return;
   }
+  if (url.pathname === '/api/images' && request.method === 'POST') {
+    lastImageRequest = await readJson(request);
+    imagePollCount = 0;
+    json(response, {
+      taskId: 'browser-image-task-12345678',
+      provider: 'dashscope',
+      modelId: lastImageRequest.model,
+      status: 'PENDING',
+    }, 202);
+    return;
+  }
   if (url.pathname === '/api/videos/browser-task-12345678') {
     pollCount += 1;
     if (pollCount === 1) {
@@ -97,12 +107,33 @@ const server = http.createServer(async (request, response) => {
     });
     return;
   }
+  if (url.pathname === '/api/images/browser-image-task-12345678') {
+    imagePollCount += 1;
+    if (imagePollCount === 1) {
+      json(response, { taskId: 'browser-image-task-12345678', status: 'RUNNING', progress: 48, terminal: false });
+      return;
+    }
+    json(response, {
+      taskId: 'browser-image-task-12345678',
+      status: 'SUCCEEDED',
+      progress: 100,
+      terminal: true,
+      imageUrls: [`http://127.0.0.1:${port}/mock/result.png`],
+      size: '2K',
+    });
+    return;
+  }
   if (url.pathname === '/api/video-download') {
     response.writeHead(200, {
       'content-disposition': 'attachment; filename="generated-video.mp4"',
       'content-type': 'video/mp4',
     });
     response.end('browser-fixture-video');
+    return;
+  }
+  if (url.pathname === '/api/image-download') {
+    response.writeHead(200, { 'content-disposition': 'attachment; filename="generated-image.png"', 'content-type': 'image/png' });
+    response.end(pixel);
     return;
   }
 
