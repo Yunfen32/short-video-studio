@@ -1,5 +1,7 @@
 import { handleVideoApiRequest } from "./shared/video-api.mjs";
 
+import { embeddedAssetResponse } from "./embedded-assets.mjs";
+
 function assetRequest(request, pathname) {
   const url = new URL(request.url);
   url.pathname = pathname;
@@ -63,12 +65,13 @@ export default {
 
     const url = new URL(request.url);
     const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-    if (!env?.ASSETS?.fetch) return new Response("Not found", { status: 404 });
+    const fallback = embeddedAssetResponse(pathname, request.method);
+    if (!env?.ASSETS?.fetch) return fallback || new Response("Not found", { status: 404 });
 
     let response = await env.ASSETS.fetch(assetRequest(request, pathname));
     if (response.status === 404 && !pathname.includes(".")) {
       response = await env.ASSETS.fetch(assetRequest(request, "/index.html"));
     }
-    return response;
+    return response.status === 404 ? (fallback || response) : response;
   },
 };
