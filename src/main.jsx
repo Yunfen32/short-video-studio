@@ -52,6 +52,8 @@ import {
   remapImageMentions,
   stripImageMentions,
 } from './video-ui-state.mjs';
+import { isFreeVideoModel } from '../shared/free-models.mjs';
+import { getVideoExample } from '../shared/video-examples.mjs';
 import './styles.css';
 import ImageStudio from './image-studio.jsx';
 
@@ -123,14 +125,17 @@ function durationLabel(model) {
   if (model.durationMode === 'source') return '跟随源视频';
   if (model.durationMode === 'truncate') return '保留或截取 2-10 秒';
   const values = model.durations;
+  const isContinuous = values.every((value, index) => index === 0 || value === values[index - 1] + 1);
+  if (!isContinuous) return values.join(' / ') + ' 秒';
   return values.length === 1 ? values[0] + ' 秒' : values[0] + '-' + values[values.length - 1] + ' 秒';
 }
 
 function audioLabel(capability) {
   if (capability.audioMode === 'voice_reference') return '人物音色';
   if (capability.audioMode === 'driving_audio') return '驱动音频';
+  if (capability.audioMode === 'required_input_audio') return '必需人声音频';
   if (capability.audioMode === 'input_audio') return '音频输入';
-  if (capability.outputAudio) return '原生有声';
+  if (capability.audioMode === 'output_audio' || capability.outputAudio) return '模型生成声音';
   return '无外部音频';
 }
 
@@ -168,6 +173,7 @@ function videoFieldLabel(capability, workflowId) {
 function audioFieldLabel(capability) {
   if (capability.audioMode === 'voice_reference') return '人物音色参考 URL（绑定第一个人物）';
   if (capability.audioMode === 'driving_audio') return '驱动音频 URL（可选）';
+  if (capability.audioMode === 'required_input_audio') return '人物音频 URL（必填）';
   return '音频输入 URL（可选）';
 }
 
@@ -193,9 +199,11 @@ function VideoStudio({ onOpenImage }) {
   const [error, setError] = useState('');
   const [mention, setMention] = useState(null);
   const [unavailableModels, setUnavailableModels] = useState([]);
+  const [freeOnly, setFreeOnly] = useState(false);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
   const [demoMode, setDemoMode] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [loadedExampleId, setLoadedExampleId] = useState('');
   const videoRef = useRef(null);
   const promptRef = useRef(null);
   const activeTaskRef = useRef(0);
@@ -213,8 +221,8 @@ function VideoStudio({ onOpenImage }) {
     [unavailableModels],
   );
   const availableModels = useMemo(
-    () => VIDEO_MODELS.filter((item) => !unavailableIds.has(item.id)),
-    [unavailableIds],
+    () => VIDEO_MODELS.filter((item) => (!freeOnly || isFreeVideoModel(item)) && !unavailableIds.has(item.id)),
+    [freeOnly, unavailableIds],
   );
   const currentWorkflow = getVideoWorkflow(workflowId);
   const workflowGroupId = currentWorkflow?.groupId || 'text';
@@ -250,7 +258,7 @@ function VideoStudio({ onOpenImage }) {
   const activeImages = images.slice(0, imageLimit);
   const canUseImages = imageLimit > 0;
   const canUseVideo = selectedCapability.videoMode !== 'none';
-  const canUseAudio = selectedCapability.audioMode !== 'none';
+  const canUseAudio = ['input_audio', 'voice_reference', 'driving_audio', 'required_input_audio'].includes(selectedCapability.audioMode);
   const availableRatios = selectedModel?.protocol === 't2vLegacy' && resolution === '480P'
     ? selectedCapability.ratioOptions.filter((item) => ['16:9', '9:16', '1:1'].includes(item))
     : selectedCapability.ratioOptions;
@@ -287,6 +295,9 @@ function VideoStudio({ onOpenImage }) {
     ) {
       return '音色参考需要至少一张人物参考图';
     }
+    if (selectedCapability.audioMode === 'required_input_audio' && !audioUrl.trim()) {
+      return '请填写人物音频 URL';
+    }
     return '';
   }
 
@@ -303,8 +314,10 @@ function VideoStudio({ onOpenImage }) {
     try {
       const data = await apiRequest('/api/models');
       setUnavailableModels(Array.isArray(data.unavailable) ? data.unavailable : []);
-    } catch {
-      // The generation request exposes a server error only when the service is unavailable.
+      setFreeOnly(data.freeOnly === true);
+      if (data.freeOnly === false) setError('当前服务未启用免费模型保护');
+    } catch (availabilityError) {
+      setError('模型状态暂时无法读取，请稍后重试');
     } finally {
       setAvailabilityLoading(false);
     }
@@ -425,7 +438,25 @@ function VideoStudio({ onOpenImage }) {
     } else {
       setError('');
     }
+    setLoadedExampleId('');
     setModelId(nextModel.id);
+  }
+
+  function loadModelExample(model) {
+    const example = getVideoExample(model?.id, workflowId);
+    if (!model || !example) return;
+    selectModel(model);
+    setPrompt(example.prompt);
+    setStyle(example.style);
+    setDuration(example.duration);
+    setRatio(example.ratio);
+    setResolution(model.resolutions.includes(example.resolution) ? example.resolution : model.resolutions[0]);
+    setAudioUrl('');
+    setVideoInputUrl('');
+    setMention(null);
+    setError('');
+    setLoadedExampleId(model.id);
+    window.requestAnimationFrame(() => promptRef.current?.focus());
   }
 
   function handlePromptChange(event) {
@@ -704,6 +735,7 @@ function VideoStudio({ onOpenImage }) {
         videoId: data.videoId,
         status: data.status,
       });
+      if (!data.taskId) throw new Error('视频服务没有返回任务编号，请稍后重试');
       pollTask(data.taskId, taskToken, data.provider, data.videoId);
     } catch (requestError) {
       if (activeTaskRef.current !== taskToken) return;
@@ -733,6 +765,7 @@ function VideoStudio({ onOpenImage }) {
     setSeed('');
     setPromptExtend(true);
     setAudioSetting('auto');
+    setLoadedExampleId('');
     setError('');
   }
 
@@ -813,12 +846,19 @@ function VideoStudio({ onOpenImage }) {
   const isPortrait = previewRatio === '9:16' || previewRatio === '3:4';
   const isSquare = previewRatio === '1:1';
   const errorMessage = error || task.error;
+  const previewStatusTone = taskStatus === 'SUCCEEDED'
+    ? 'status-success'
+    : taskStatus === 'FAILED'
+      ? 'status-error'
+      : isGenerating
+        ? 'status-active'
+        : '';
 
   return (
-    <main className="app-shell">
+    <main className="app-shell video-app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <p>阿里云百炼 + Agnes AI</p>
+          <p>免费媒体模型</p>
           <h1>视频生成工作台</h1>
         </div>
         <div className="topbar-controls">
@@ -864,6 +904,7 @@ function VideoStudio({ onOpenImage }) {
               type="button"
               key={group.id}
               className={workflowGroupId === group.id ? 'active' : ''}
+              aria-current={workflowGroupId === group.id ? 'page' : undefined}
               onClick={() => selectGroup(group.id)}
               disabled={availableTasks === 0}
             >
@@ -916,6 +957,7 @@ function VideoStudio({ onOpenImage }) {
                 const isActive = family.variants.some((item) => item.id === selectedModel?.id);
                 const displayModel = isActive ? selectedModel : (family.variants.find((item) => item.featured) || family.variants[0]);
                 const capability = getWorkflowCapability(displayModel, workflowId);
+                const example = getVideoExample(displayModel.id, workflowId);
                 return (
                   <div className={'model-family-row ' + (isActive ? 'active' : '')} key={family.key}>
                     <button
@@ -926,9 +968,9 @@ function VideoStudio({ onOpenImage }) {
                       role="option"
                       aria-selected={isActive}
                     >
-                      <span className="provider-name">{family.providerLabel}</span>
+                        <span className="provider-name">{family.providerLabel} · 免费</span>
                       <strong>{family.familyLabel}</strong>
-                      <p>{currentWorkflow?.summary}</p>
+                      <p>适用：{currentWorkflow?.label}</p>
                       <small className="model-feature-note">{displayModel.summary}</small>
                       <div className="model-capabilities">
                         <span>{durationLabel(displayModel)}</span>
@@ -937,7 +979,7 @@ function VideoStudio({ onOpenImage }) {
                         {capability.imageMax > 0 && <span>{capability.imageMin}-{capability.imageMax} 图</span>}
                       </div>
                     </button>
-                    <label className="variant-select">
+                    <div className="variant-select">
                       <span>变体</span>
                       <select
                         value={displayModel.id}
@@ -947,7 +989,25 @@ function VideoStudio({ onOpenImage }) {
                         {family.variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.variantLabel}</option>)}
                       </select>
                       <small>{displayModel.id}</small>
-                    </label>
+                    </div>
+                    {example && (
+                      <div className="model-example">
+                        <div className="model-example-copy">
+                          <span>5 秒 · 2D 动漫案例</span>
+                          <strong>{example.title}</strong>
+                          <small title={example.prompt}>{example.prompt}</small>
+                        </div>
+                        <button
+                          type="button"
+                          className="example-load"
+                          onClick={() => loadModelExample(displayModel)}
+                          disabled={isGenerating}
+                        >
+                          <Wand2 size={13} />
+                          {loadedExampleId === displayModel.id ? '已载入' : '载入案例'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1177,29 +1237,29 @@ function VideoStudio({ onOpenImage }) {
 
           <div className="action-row">
             <div className="primary-action-wrap">
-              <button className="primary-action" onClick={generateVideo} disabled={!canGenerate} data-testid="generate-video">
+              <button className="primary-action" onClick={generateVideo} disabled={!canGenerate} data-testid="generate-video" title={missingRequirement || '提交视频生成任务'} aria-describedby="generation-requirement">
                 {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
                 {isGenerating ? '正在生成' : (demoMode ? '演示生成' : '生成视频')}
               </button>
-              <p className={missingRequirement ? 'action-note warning' : 'action-note ready'}>
+              <p id="generation-requirement" className={missingRequirement ? 'action-note warning' : 'action-note ready'} aria-live="polite">
                 {isGenerating ? '任务已提交，可在右侧查看状态' : (missingRequirement || '输入完整，可以生成')}
               </p>
             </div>
-            <button className="icon-action" onClick={reset} aria-label="重置"><RefreshCw size={18} /></button>
+            <button className="icon-action" onClick={reset} aria-label="重置" title="重置当前任务"><RefreshCw size={18} /></button>
           </div>
         </aside>
 
         <section className="preview-panel">
           <div className="preview-toolbar">
             <div className="panel-heading"><Film size={18} /><div><h2>生成结果</h2><span>{previewWorkflowLabel}</span></div></div>
-            <div className="preview-model-state" data-testid="preview-model">
-              {availabilityLoading ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
-              <span>{isDemoTask ? '演示 · ' : ''}{previewModelLabel}</span>
+            <div className={'preview-model-state ' + previewStatusTone} data-testid="preview-model" aria-live="polite">
+              {isGenerating ? <Loader2 className="spin" size={14} /> : taskStatus === 'FAILED' ? <AlertTriangle size={14} /> : <Check size={14} />}
+              <span>{isDemoTask ? '演示 · ' : ''}{previewModelLabel} · {statusLabels[taskStatus] || taskStatus}</span>
             </div>
             <div className="toolbar-actions">
-              <button className="icon-action" onClick={togglePlayback} disabled={!videoUrl} aria-label="播放或暂停"><Play size={18} /></button>
-              <a className={'icon-action ' + (!videoUrl ? 'disabled' : '')} href={videoUrl || undefined} target="_blank" rel="noreferrer" aria-label="在新窗口打开视频"><ExternalLink size={18} /></a>
-              <button className="icon-action" onClick={downloadVideo} disabled={!videoUrl || downloading} aria-label="下载视频">
+              <button className="icon-action" onClick={togglePlayback} disabled={!videoUrl} aria-label="播放或暂停" title="播放或暂停"><Play size={18} /></button>
+              <a className={'icon-action ' + (!videoUrl ? 'disabled' : '')} href={videoUrl || undefined} target="_blank" rel="noreferrer" aria-label="在新窗口打开视频" title="在新窗口打开视频"><ExternalLink size={18} /></a>
+              <button className="icon-action" onClick={downloadVideo} disabled={!videoUrl || downloading} aria-label="下载视频" title="下载视频">
                 {downloading ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
               </button>
             </div>

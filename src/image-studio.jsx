@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   Download,
   ExternalLink,
   Image as ImageIcon,
@@ -17,6 +18,7 @@ import {
   IMAGE_WORKFLOWS,
   supportsImageWorkflow,
 } from '../shared/image-models.mjs';
+import { isFreeImageModel } from '../shared/free-models.mjs';
 
 const POLL_INTERVAL = Number(import.meta.env.VITE_POLL_INTERVAL) || 5000;
 
@@ -50,6 +52,13 @@ function statusLabel(status) {
   return { IDLE: '待生成', PENDING: '排队中', RUNNING: '生成中', SUCCEEDED: '已完成', FAILED: '生成失败' }[status] || status;
 }
 
+function taskStatusTone(status) {
+  if (status === 'SUCCEEDED') return 'status-success';
+  if (status === 'FAILED') return 'status-error';
+  if (status === 'PENDING' || status === 'RUNNING') return 'status-active';
+  return '';
+}
+
 export default function ImageStudio({ onOpenVideo }) {
   const [workflowId, setWorkflowId] = useState('text-to-image');
   const [modelId, setModelId] = useState('wan2.7-image-pro');
@@ -59,15 +68,23 @@ export default function ImageStudio({ onOpenVideo }) {
   const [watermark, setWatermark] = useState(false);
   const [images, setImages] = useState([]);
   const [uploading, setUploading] = useState(0);
-  const [task, setTask] = useState({ status: 'IDLE', taskId: '', imageUrls: [], size: '', error: '', modelLabel: '' });
+  const [task, setTask] = useState({ status: 'IDLE', taskId: '', provider: '', imageUrls: [], size: '', error: '', modelLabel: '' });
   const [error, setError] = useState('');
   const [unavailable, setUnavailable] = useState([]);
+  const [freeOnly, setFreeOnly] = useState(false);
   const pollToken = useRef(0);
   const timerRef = useRef(0);
   const uploadToken = useRef(0);
 
   const unavailableIds = useMemo(() => new Set(unavailable.map((item) => item.modelId)), [unavailable]);
-  const availableModels = useMemo(() => IMAGE_MODELS.filter((model) => !unavailableIds.has(model.id)), [unavailableIds]);
+  const availableModels = useMemo(
+    () => IMAGE_MODELS.filter((model) => (!freeOnly || isFreeImageModel(model)) && !unavailableIds.has(model.id)),
+    [freeOnly, unavailableIds],
+  );
+  const availableWorkflows = useMemo(
+    () => IMAGE_WORKFLOWS.filter((item) => availableModels.some((model) => supportsImageWorkflow(model, item.id))),
+    [availableModels],
+  );
   const workflow = getImageWorkflow(workflowId);
   const compatibleModels = availableModels.filter((model) => supportsImageWorkflow(model, workflowId));
   const selectedModel = compatibleModels.find((model) => model.id === modelId) || compatibleModels.find((model) => model.featured) || compatibleModels[0] || null;
@@ -80,9 +97,16 @@ export default function ImageStudio({ onOpenVideo }) {
   );
 
   useEffect(() => {
+    if (!availableWorkflows.some((item) => item.id === workflowId) && availableWorkflows[0]) {
+      setWorkflowId(availableWorkflows[0].id);
+    }
+  }, [availableWorkflows, workflowId]);
+
+  useEffect(() => {
     requestJson('/api/models').then((data) => {
       setUnavailable(data.unavailable || []);
-    }).catch(() => undefined);
+      setFreeOnly(data.freeOnly === true);
+    }).catch(() => setError('模型状态暂时无法读取，请稍后重试'));
   }, []);
 
   useEffect(() => {
@@ -94,6 +118,10 @@ export default function ImageStudio({ onOpenVideo }) {
     if (!selectedModel || selectedModel.qualities.includes(quality)) return;
     setQuality(selectedModel.qualities[0]);
   }, [quality, selectedModel]);
+
+  useEffect(() => {
+    if (selectedModel && count > selectedModel.maxOutputs) setCount(selectedModel.maxOutputs);
+  }, [count, selectedModel]);
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
 
@@ -132,10 +160,11 @@ export default function ImageStudio({ onOpenVideo }) {
     }
   }
 
-  async function pollImage(taskId, token) {
+  async function pollImage(taskId, token, provider = '') {
     if (pollToken.current !== token) return;
     try {
-      const data = await requestJson('/api/images/' + encodeURIComponent(taskId));
+      const providerQuery = provider ? '?provider=' + encodeURIComponent(provider) : '';
+      const data = await requestJson('/api/images/' + encodeURIComponent(taskId) + providerQuery);
       if (pollToken.current !== token) return;
       const status = data.status || 'RUNNING';
       if (status === 'SUCCEEDED' && data.imageUrls?.length) {
@@ -147,7 +176,7 @@ export default function ImageStudio({ onOpenVideo }) {
         return;
       }
       setTask((current) => ({ ...current, status, size: data.size || current.size }));
-      timerRef.current = window.setTimeout(() => pollImage(taskId, token), POLL_INTERVAL);
+      timerRef.current = window.setTimeout(() => pollImage(taskId, token, provider), POLL_INTERVAL);
     } catch (pollError) {
       if (pollToken.current === token) setTask((current) => ({ ...current, status: 'FAILED', error: pollError.message }));
     }
@@ -159,7 +188,7 @@ export default function ImageStudio({ onOpenVideo }) {
     pollToken.current = token;
     window.clearTimeout(timerRef.current);
     setError('');
-    setTask({ status: 'PENDING', taskId: '', imageUrls: [], size: quality, error: '', modelLabel: selectedModel.label });
+    setTask({ status: 'PENDING', taskId: '', provider: '', imageUrls: [], size: quality, error: '', modelLabel: selectedModel.label });
     try {
       const data = await requestJson('/api/images', {
         method: 'POST',
@@ -175,8 +204,16 @@ export default function ImageStudio({ onOpenVideo }) {
         }),
       });
       if (pollToken.current !== token) return;
-      setTask((current) => ({ ...current, taskId: data.taskId, status: data.status || 'PENDING' }));
-      pollImage(data.taskId, token);
+      setTask((current) => ({
+        ...current,
+        taskId: data.taskId || '',
+        provider: data.provider || '',
+        status: data.status || 'PENDING',
+        imageUrls: data.imageUrls || current.imageUrls,
+      }));
+      if (data.status === 'SUCCEEDED' && data.imageUrls?.length) return;
+      if (!data.taskId) throw new Error('图片服务没有返回任务或图片地址');
+      pollImage(data.taskId, token, data.provider);
     } catch (requestError) {
       if (pollToken.current !== token) return;
       setTask((current) => ({ ...current, status: 'FAILED', error: requestError.message }));
@@ -192,7 +229,7 @@ export default function ImageStudio({ onOpenVideo }) {
     setImages([]);
     setError('');
     setUploading(0);
-    setTask({ status: 'IDLE', taskId: '', imageUrls: [], size: '', error: '', modelLabel: '' });
+    setTask({ status: 'IDLE', taskId: '', provider: '', imageUrls: [], size: '', error: '', modelLabel: '' });
   }
 
   async function downloadImage(url, index) {
@@ -226,7 +263,7 @@ export default function ImageStudio({ onOpenVideo }) {
     <main className="app-shell image-app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <p>阿里云百炼 · 万相 2.7</p>
+          <p>免费图片模型</p>
           <h1>图片生成工作台</h1>
         </div>
         <div className="topbar-controls">
@@ -245,9 +282,9 @@ export default function ImageStudio({ onOpenVideo }) {
       <section className="workspace">
         <section className="control-panel">
           <section className="task-console" aria-labelledby="image-task-title">
-            <div className="section-heading"><div><h2 id="image-task-title">选择生成方式</h2><p>图片生成与参考图编辑</p></div></div>
+            <div className="section-heading"><span>01</span><div><h2 id="image-task-title">选择生成方式</h2><p>图片生成与参考图编辑</p></div></div>
             <div className="task-tabs image-task-tabs" role="tablist">
-              {IMAGE_WORKFLOWS.map((item) => (
+              {availableWorkflows.map((item) => (
                 <button type="button" key={item.id} className={workflowId === item.id ? 'active' : ''} onClick={() => selectWorkflow(item.id)} role="tab" aria-selected={workflowId === item.id}>
                   <strong>{item.label}</strong><span>{item.summary}</span>
                 </button>
@@ -256,19 +293,20 @@ export default function ImageStudio({ onOpenVideo }) {
           </section>
 
           <section className="model-console" aria-labelledby="image-model-title">
-            <div className="section-heading"><div><h2 id="image-model-title">选择模型</h2><p>{workflow?.label}</p></div></div>
+            <div className="section-heading"><span>02</span><div><h2 id="image-model-title">选择模型</h2><p>{workflow?.label}</p></div></div>
             <div className="image-model-list" role="listbox" aria-label="图片模型">
               {compatibleModels.map((model) => (
                 <button type="button" key={model.id} className={selectedModel?.id === model.id ? 'active' : ''} onClick={() => setModelId(model.id)} role="option" aria-selected={selectedModel?.id === model.id}>
                   <span><strong>{model.label}</strong><small>{model.summary}</small></span>
-                  <em>{model.variantLabel}</em>
+                  <em>{model.providerLabel} · 免费 · {model.variantLabel}</em>
                 </button>
               ))}
+              {!compatibleModels.length && <p className="empty-model-state">当前没有可用的免费图片模型，请稍后刷新模型状态。</p>}
             </div>
           </section>
 
           <section className="input-console" aria-labelledby="image-input-title">
-            <div className="section-heading"><div><h2 id="image-input-title">描述与参考</h2><p>{workflow?.summary}</p></div></div>
+            <div className="section-heading"><span>03</span><div><h2 id="image-input-title">描述与参考</h2><p>{workflow?.summary}</p></div></div>
             {workflowId === 'image-edit' && (
               <div className="reference-grid image-reference-grid">
                 {images.map((image, index) => (
@@ -285,10 +323,11 @@ export default function ImageStudio({ onOpenVideo }) {
                 )}
               </div>
             )}
-            <label className="prompt-field"><span>图片描述</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); generateImage(); } }} placeholder={workflowId === 'image-edit' ? '描述如何改造、组合或延展参考图' : '描述主体、场景、构图、光线和风格'} maxLength={5000} /></label>
+            <label className="field prompt-field image-prompt-field"><span>图片描述</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); generateImage(); } }} placeholder={workflowId === 'image-edit' ? '描述如何改造、组合或延展参考图' : '描述主体、场景、构图、光线和风格'} maxLength={5000} /><small>{prompt.length}/5000</small></label>
           </section>
 
           <section className="settings-console" aria-label="图片生成设置">
+            <div className="section-heading"><span>04</span><div><h2>输出设置</h2><p>{selectedModel?.variantLabel || '当前免费模型'}</p></div></div>
             <div className="settings-grid">
               <label className="field"><span>清晰度</span><select value={quality} onChange={(event) => setQuality(event.target.value)}>{(selectedModel?.qualities || []).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
               <label className="field"><span>生成数量</span><select value={count} onChange={(event) => setCount(Number(event.target.value))}>{Array.from({ length: selectedModel?.maxOutputs || 1 }, (_, index) => index + 1).map((item) => <option key={item} value={item}>{item} 张</option>)}</select></label>
@@ -296,19 +335,19 @@ export default function ImageStudio({ onOpenVideo }) {
             </div>
           </section>
 
-          {taskError && <p className="error-message"><AlertTriangle size={16} />{taskError}</p>}
+          {taskError && <p className="error-message" role="alert"><AlertTriangle size={16} />{taskError}</p>}
           <section className="action-row">
-            <div className="primary-action-wrap"><button type="button" className="primary-action" onClick={generateImage} disabled={!canGenerate}><Sparkles size={17} />{['PENDING', 'RUNNING'].includes(task.status) ? '正在生成' : '生成图片'}</button><p className={'action-note ' + (canGenerate ? 'ready' : 'warning')}>{requirement}</p></div>
-            <button type="button" className="icon-action" onClick={resetImage} aria-label="重置图片创作"><RefreshCw size={18} /></button>
+            <div className="primary-action-wrap"><button type="button" className="primary-action" onClick={generateImage} disabled={!canGenerate} title={requirement || '提交图片生成任务'} aria-describedby="image-generation-requirement"><Sparkles size={17} />{['PENDING', 'RUNNING'].includes(task.status) ? '正在生成' : '生成图片'}</button><p id="image-generation-requirement" className={'action-note ' + (canGenerate ? 'ready' : 'warning')} aria-live="polite">{requirement}</p></div>
+            <button type="button" className="icon-action" onClick={resetImage} aria-label="重置图片创作" title="重置当前任务"><RefreshCw size={18} /></button>
           </section>
         </section>
 
         <section className="preview-panel image-preview-panel" aria-label="图片生成结果">
-          <div className="preview-toolbar"><div className="panel-heading"><ImageIcon size={18} /><div><h2>生成结果</h2><span>{task.modelLabel || selectedModel?.label || '暂无可用模型'}</span></div></div><div className="preview-model-state"><Loader2 className={['PENDING', 'RUNNING'].includes(task.status) ? 'spin' : ''} size={15} /><span>{statusLabel(task.status)}</span></div></div>
+          <div className="preview-toolbar"><div className="panel-heading"><ImageIcon size={18} /><div><h2>生成结果</h2><span>{task.modelLabel || selectedModel?.label || '暂无可用模型'}</span></div></div><div className={'preview-model-state ' + taskStatusTone(task.status)} aria-live="polite">{['PENDING', 'RUNNING'].includes(task.status) ? <Loader2 className="spin" size={15} /> : task.status === 'FAILED' ? <AlertTriangle size={15} /> : <Check size={15} />}<span>{statusLabel(task.status)}</span></div></div>
           <div className={'image-result-stage ' + (task.imageUrls.length ? 'has-images' : '')}>
             {task.imageUrls.length ? task.imageUrls.map((url, index) => (
-              <figure className="generated-image" key={url}><img src={url} alt={'生成图片 ' + (index + 1)} /><figcaption><span>图片 {index + 1}</span><div><a className="icon-action" href={url} target="_blank" rel="noreferrer" aria-label={'打开生成图片 ' + (index + 1)}><ExternalLink size={16} /></a><button type="button" className="icon-action" onClick={() => downloadImage(url, index)} aria-label={'下载生成图片 ' + (index + 1)}><Download size={16} /></button></div></figcaption></figure>
-            )) : <div className="image-empty-state"><ImagePlus size={36} /><strong>{['PENDING', 'RUNNING'].includes(task.status) ? '图片正在生成' : (prompt.trim() || '生成的图片会显示在这里')}</strong><span>{task.taskId ? 'TASK ' + task.taskId : '万相 2.7 Image'}</span></div>}
+              <figure className="generated-image" key={url}><img src={url} alt={'生成图片 ' + (index + 1)} /><figcaption><span>图片 {index + 1}</span><div><a className="icon-action" href={url} target="_blank" rel="noreferrer" aria-label={'打开生成图片 ' + (index + 1)} title="在新窗口打开图片"><ExternalLink size={16} /></a><button type="button" className="icon-action" onClick={() => downloadImage(url, index)} aria-label={'下载生成图片 ' + (index + 1)} title="下载图片"><Download size={16} /></button></div></figcaption></figure>
+            )) : <div className="image-empty-state"><ImagePlus size={36} /><span className="result-eyebrow">{['PENDING', 'RUNNING'].includes(task.status) ? '任务进行中' : task.status === 'FAILED' ? '生成未完成' : '等待输入'}</span><strong>{['PENDING', 'RUNNING'].includes(task.status) ? '图片正在生成' : (prompt.trim() || '生成的图片会显示在这里')}</strong><span>{task.taskId ? 'TASK ' + task.taskId : (selectedModel?.label || '免费图片模型')}</span></div>}
           </div>
           <div className="result-readout"><div><span>生成方式</span><strong>{workflow?.label || '--'}</strong></div><div><span>清晰度</span><strong>{task.size || quality}</strong></div><div><span>任务编号</span><strong>{task.taskId || '--'}</strong></div><div><span>结果状态</span><strong>{statusLabel(task.status)}</strong></div></div>
         </section>

@@ -11,9 +11,18 @@ import {
   IMAGE_MODELS,
   supportsImageWorkflow,
 } from "./image-models.mjs";
+import { isFreeImageModel, isFreeVideoModel } from "./free-models.mjs";
 
 const DEFAULT_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com";
-const AGNES_API_BASE = "https://apihub.agnes-ai.com";
+const DEFAULT_AGNES_API_BASE = "https://apihub.agnes-ai.com";
+const DEFAULT_ZHIPU_API_BASE = "https://open.bigmodel.cn/api/paas/v4";
+const IMAGE_QUALITY_SIZES = {
+  "1K": "1024*1024",
+  "2K": "2048*2048",
+  "4K": "4096*4096",
+};
+const ZHIPU_API_PROVIDER = "zhipu";
+const FREE_MODELS_ONLY_ENV = "FREE_MODELS_ONLY";
 const AGNES_VIDEO_MODEL = "agnes-video-v2.0";
 const SUB2API_GROK = Object.freeze({
   provider: "sub2api_grok",
@@ -53,12 +62,35 @@ function runtimeNow(runtime) {
   return Number(runtime?.now?.() ?? Date.now());
 }
 
+function freeModelsOnly(runtime) {
+  return runtimeEnv(runtime, FREE_MODELS_ONLY_ENV) === "true";
+}
+
+function accessProtectionDisabled(runtime) {
+  const configured = runtimeEnv(runtime, "VIDEO_ACCESS_DISABLED");
+  if (configured) return configured === "true";
+  if (runtimeEnv(runtime, "VIDEO_ACCESS_TOKEN")) return false;
+  return runtime?.platform === "netlify" || runtime?.platform === "sites";
+}
+
 function dashscopeBase(runtime) {
   return (runtimeEnv(runtime, "DASHSCOPE_BASE_URL") || DEFAULT_DASHSCOPE_API_BASE).replace(/\/$/, "");
 }
 
 function sub2apiGrokBase(runtime) {
   return (runtimeEnv(runtime, "SUB2API_GROK_BASE_URL") || SUB2API_GROK.baseUrl).replace(/\/$/, "");
+}
+
+function zhipuBase(runtime) {
+  return (runtimeEnv(runtime, "ZHIPU_API_BASE") || DEFAULT_ZHIPU_API_BASE).replace(/\/$/, "");
+}
+
+function agnesBase(runtime) {
+  return (runtimeEnv(runtime, "AGNES_API_BASE") || `${DEFAULT_AGNES_API_BASE}/v1`).replace(/\/$/, "");
+}
+
+function agnesRoot(runtime) {
+  return agnesBase(runtime).replace(/\/v1$/, "");
 }
 
 function upstreamMessage(payload, fallback) {
@@ -166,6 +198,7 @@ async function publicAgnesImageUrl(source, origin, runtime) {
   const match = source.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([\s\S]+)$/i);
   if (!match) throw new Error("Agnes 参考图格式无效");
 
+  if (runtime?.inlineReferenceImages) return source;
   const [, contentType, encoded] = match;
   const key = `agnes/${crypto.randomUUID()}.${referenceImageExtension(contentType.toLowerCase())}`;
   if (!runtime?.storage) throw new Error("图片存储尚未配置");
@@ -275,6 +308,7 @@ export function validateRequest(model, data) {
   if (data.audioUrl && !validAssetUrl(data.audioUrl)) return "音频需使用可访问的 HTTP、HTTPS 或 OSS URL";
   if (data.videoUrl && !validAssetUrl(data.videoUrl)) return "视频需使用可访问的 HTTP、HTTPS 或 OSS URL";
   if (workflowCapability.audioMode === "none" && data.audioUrl) return "当前生成方式不支持外部音频";
+  if (workflowCapability.audioMode === "required_input_audio" && !data.audioUrl) return "当前生成方式需要人物音频 URL";
   if (workflowCapability.audioMode === "voice_reference" && data.audioUrl && !data.images.some((item) => item.role === "character")) {
     return "音色参考需要至少 1 张人物参考图";
   }
@@ -451,6 +485,20 @@ export function buildDashscopeRequest(model, data) {
     };
   }
 
+  if (model.protocol === "s2v") {
+    return {
+      endpoint: "/api/v1/services/aigc/image2video/video-synthesis",
+      payload: {
+        model: model.id,
+        input: {
+          image_url: data.images[0].source,
+          audio_url: data.audioUrl,
+        },
+        parameters: { resolution: data.resolution },
+      },
+    };
+  }
+
   if (model.protocol === "kf2vLegacy") {
     return {
       endpoint: "/api/v1/services/aigc/image2video/video-synthesis",
@@ -525,6 +573,29 @@ export function buildDashscopeRequest(model, data) {
     };
   }
 
+  if (model.protocol === "vace") {
+    const imageReference = data.images.length > 0;
+    return {
+      endpoint: defaultEndpoint,
+      payload: {
+        model: model.id,
+        input: {
+          function: imageReference ? "image_reference" : "video_repainting",
+          prompt,
+          video_url: data.videoUrl,
+          ...(imageReference ? { ref_images_url: data.images.map((item) => item.source) } : {}),
+        },
+        parameters: {
+          prompt_extend: data.promptExtend,
+          size: legacyVideoSize(data.resolution, data.ratio),
+          ...(imageReference ? {
+            obj_or_bg: data.images.map((item) => item.role === "background" ? "bg" : "obj"),
+          } : {}),
+        },
+      },
+    };
+  }
+
   if (model.protocol === "happyhorseVideoEdit") {
     return {
       endpoint: defaultEndpoint,
@@ -577,6 +648,29 @@ export function buildGrokVideoRequest(model, data, imageUrls) {
   if (data.workflow === "first-frame") payload.image = imageUrls[0];
   if (data.workflow === "multi-reference") payload.reference_images = imageUrls;
   return payload;
+}
+
+function zhipuVideoSize(resolution, ratio) {
+  const sizes = {
+    "720P": { "16:9": "1280x720", "9:16": "720x1280", "1:1": "1024x1024", "4:3": "1280x720", "3:4": "720x1280" },
+    "1080P": { "16:9": "1920x1080", "9:16": "1080x1920", "1:1": "1024x1024", "4:3": "1920x1080", "3:4": "1080x1920" },
+    "4K": { "16:9": "3840x2160", "9:16": "3840x2160", "1:1": "3840x2160", "4:3": "3840x2160", "3:4": "3840x2160" },
+  };
+  return sizes[resolution]?.[ratio] || sizes[resolution]?.["16:9"] || sizes["720P"]["16:9"];
+}
+
+export function buildZhipuVideoRequest(model, data, imageUrls = []) {
+  return {
+    model: model.id,
+    prompt: data.prompt || "让画面自然运动起来",
+    quality: "speed",
+    with_audio: Boolean(model.outputAudio),
+    watermark_enabled: data.watermark,
+    size: zhipuVideoSize(data.resolution, data.ratio),
+    fps: 30,
+    duration: data.duration,
+    ...(imageUrls.length ? { image_url: imageUrls.length === 1 ? imageUrls[0] : imageUrls } : {}),
+  };
 }
 
 function fetchFor(runtime) {
@@ -660,7 +754,7 @@ function agnesDimensions(ratio, resolution) {
 }
 
 function agnesFrames(duration) {
-  return Math.min(441, Math.round(duration * 24 / 8) * 8 + 1);
+  return { 3: 81, 5: 121, 7: 161, 10: 241, 18: 441 }[duration] || 121;
 }
 
 function agnesStatus(status) {
@@ -703,7 +797,7 @@ async function createAgnesVideo(model, body, origin, runtime) {
   if (validationError) return json({ error: validationError }, 400);
 
   const imageUrls = await Promise.all(data.images.map((item) => publicAgnesImageUrl(item.source, origin, runtime)));
-  const response = await fetchFor(runtime)(`${AGNES_API_BASE}/v1/videos`, {
+  const response = await fetchFor(runtime)(`${agnesBase(runtime)}/videos`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify(buildAgnesPayload(data, imageUrls)),
@@ -746,6 +840,35 @@ async function createGrokVideo(model, body, origin, runtime) {
   }, 202);
 }
 
+function zhipuTaskStatus(status) {
+  return { PROCESSING: "RUNNING", PENDING: "PENDING", SUCCESS: "SUCCEEDED", SUCCEEDED: "SUCCEEDED", FAIL: "FAILED", FAILED: "FAILED" }[status] || "UNKNOWN";
+}
+
+async function createZhipuVideo(model, body, origin, runtime) {
+  const apiKey = runtimeEnv(runtime, "ZHIPU_API_KEY");
+  if (!apiKey) return json({ error: "Zhipu AI 视频服务尚未配置" }, 503);
+  const data = prepareRequestData(model, body);
+  const validationError = validateRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+
+  const imageUrls = await Promise.all(data.images.map((item) => publicAgnesImageUrl(item.source, origin, runtime)));
+  const response = await fetchFor(runtime)(`${zhipuBase(runtime)}/videos/generations`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildZhipuVideoRequest(model, data, imageUrls)),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !(result.id || result.task_id)) {
+    return modelCreationFailure(response, result, model.id, runtime, "Zhipu AI 视频任务创建失败");
+  }
+  return json({
+    taskId: result.id || result.task_id,
+    provider: ZHIPU_API_PROVIDER,
+    modelId: model.id,
+    status: zhipuTaskStatus(result.task_status),
+  }, 202);
+}
+
 async function createVideo(request, runtime) {
   let body;
   try {
@@ -756,6 +879,9 @@ async function createVideo(request, runtime) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "请求内容必须是 JSON 对象" }, 400);
   const model = getVideoModel(body.model);
   if (!model) return json({ error: "不支持该视频模型" }, 400);
+  if (freeModelsOnly(runtime) && !isFreeVideoModel(model)) {
+    return json({ error: "当前工作台仅允许免费模型", paidModelBlocked: true, modelId: model.id }, 403);
+  }
   if (body.workflow && !supportsWorkflow(model, body.workflow)) {
     return json({ error: "当前模型不支持所选生成方式" }, 400);
   }
@@ -772,6 +898,7 @@ async function createVideo(request, runtime) {
   const origin = new URL(request.url).origin;
   if (model.provider === "agnes") return createAgnesVideo(model, body, origin, runtime);
   if (model.provider === "sub2api_grok") return createGrokVideo(model, body, origin, runtime);
+  if (model.provider === ZHIPU_API_PROVIDER) return createZhipuVideo(model, body, origin, runtime);
   return createDashscopeVideo(model, body, runtime);
 }
 
@@ -802,35 +929,200 @@ export function validateImageRequest(model, data) {
   if (!Number.isInteger(data.count) || data.count < 1 || data.count > model.maxOutputs) {
     return `一次可生成 1-${model.maxOutputs} 张图片`;
   }
-  const imageLimit = data.workflow === "image-edit" ? 9 : 0;
+  const imageLimit = data.workflow === "image-edit" ? Number(model.maxInputImages || 9) : 0;
   if (data.images.length > imageLimit) return `当前生成方式最多使用 ${imageLimit} 张参考图`;
   if (data.workflow === "image-edit" && !data.images.length) return "请上传至少 1 张参考图";
   if (data.images.some((source) => !validImageSource(source))) return "参考图仅支持 HTTPS 地址或 4MB 以内的 JPG、PNG、WEBP 图片";
-  if (data.workflow === "image-edit" && data.quality === "4K") return "参考图编辑最高支持 2K";
+  if (
+    data.workflow === "image-edit"
+    && model.editMaxQuality
+    && model.qualities.indexOf(data.quality) > model.qualities.indexOf(model.editMaxQuality)
+  ) {
+    return `当前模型参考图编辑最高支持 ${model.editMaxQuality}`;
+  }
   return null;
 }
 
-export function buildDashscopeImageRequest(model, data) {
+function imageSizeFor(model, quality) {
+  return model.qualitySizes?.[quality] || IMAGE_QUALITY_SIZES[quality] || "1024*1024";
+}
+
+function imageMessages(data) {
+  return [{
+    role: "user",
+    content: [
+      ...data.images.map((image) => ({ image })),
+      { text: data.prompt },
+    ],
+  }];
+}
+
+function imageParameters(model, data) {
   return {
-    endpoint: "/api/v1/services/aigc/image-generation/generation",
+    ...(model.maxOutputs > 1 ? { n: data.count } : {}),
+    watermark: data.watermark,
+    ...(model.protocol !== "zImageSync" ? { prompt_extend: true } : {}),
+    size: imageSizeFor(model, data.quality),
+  };
+}
+
+export function buildDashscopeImageRequest(model, data) {
+  if (model.protocol === "wanImage2Image") {
+    return {
+      endpoint: "/api/v1/services/aigc/image2image/image-synthesis",
+      async: true,
+      payload: {
+        model: model.id,
+        input: { prompt: data.prompt, images: data.images },
+        parameters: imageParameters(model, data),
+      },
+    };
+  }
+
+  if (model.protocol === "wanLegacyText" || model.protocol === "qwenLegacyText") {
+    return {
+      endpoint: "/api/v1/services/aigc/text2image/image-synthesis",
+      async: true,
+      payload: {
+        model: model.id,
+        input: { prompt: data.prompt },
+        parameters: imageParameters(model, data),
+      },
+    };
+  }
+
+  if (model.protocol === "zImageSync") {
+    return {
+      endpoint: "/api/v1/services/aigc/multimodal-generation/generation",
+      async: false,
+      payload: {
+        model: model.id,
+        input: { messages: imageMessages(data) },
+        parameters: imageParameters(model, data),
+      },
+    };
+  }
+
+  const synchronous = model.protocol === "qwenMessageSync";
+  return {
+    endpoint: synchronous
+      ? "/api/v1/services/aigc/multimodal-generation/generation"
+      : "/api/v1/services/aigc/image-generation/generation",
+    async: !synchronous,
     payload: {
       model: model.id,
-      input: {
-        messages: [{
-          role: "user",
-          content: [
-            ...data.images.map((image) => ({ image })),
-            { text: data.prompt },
-          ],
-        }],
-      },
-      parameters: {
-        size: data.quality,
-        n: data.count,
-        watermark: data.watermark,
-      },
+      input: { messages: imageMessages(data) },
+      parameters: imageParameters(model, data),
     },
   };
+}
+
+function zhipuImageSize(model, quality) {
+  if (quality === "1K") return "1024x1024";
+  return model.zhipuSize || "1280x1280";
+}
+
+function agnesImageSize(model, quality) {
+  return model.agnesSize?.[quality] || (quality === "1K" ? "1024x1024" : "1536x1536");
+}
+
+export function buildAgnesImageRequest(model, data, imageSources = []) {
+  return {
+    model: model.id,
+    prompt: data.prompt,
+    size: agnesImageSize(model, data.quality),
+    extra_body: {
+      response_format: "url",
+      ...(imageSources.length ? { image: imageSources } : {}),
+    },
+  };
+}
+
+export function buildZhipuImageRequest(model, data) {
+  return {
+    model: model.id,
+    prompt: data.prompt,
+    size: zhipuImageSize(model, data.quality),
+    ...(model.zhipuAsync ? { quality: "hd", watermark_enabled: data.watermark } : {}),
+  };
+}
+
+function zhipuImageUrls(result) {
+  const dataItems = Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
+  const imageItems = Array.isArray(result?.image_result) ? result.image_result : [];
+  const direct = [...dataItems, ...imageItems]
+    .map((item) => typeof item === "string" ? item : item?.url)
+    .filter(Boolean);
+  const choices = Array.isArray(result?.choices)
+    ? result.choices.flatMap((choice) => Array.isArray(choice?.message?.content) ? choice.message.content : [])
+      .map((item) => item?.image_url?.url || item?.image || item?.url)
+      .filter(Boolean)
+    : [];
+  return [...new Set([...direct, ...choices])];
+}
+
+async function createZhipuImage(model, body, runtime) {
+  const apiKey = runtimeEnv(runtime, "ZHIPU_API_KEY");
+  if (!apiKey) return json({ error: "Zhipu AI 图片服务尚未配置" }, 503);
+  const data = prepareImageRequest(model, body);
+  const validationError = validateImageRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+
+  const endpoint = model.zhipuAsync ? "/async/images/generations" : "/images/generations";
+  const response = await fetchFor(runtime)(`${zhipuBase(runtime)}${endpoint}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildZhipuImageRequest(model, data)),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return imageCreationFailure(response, result, model.id, runtime);
+
+  if (model.zhipuAsync) {
+    if (!result.id) return imageCreationFailure(response, result, model.id, runtime);
+    return json({
+      taskId: result.id,
+      provider: ZHIPU_API_PROVIDER,
+      modelId: model.id,
+      status: zhipuTaskStatus(result.task_status),
+    }, 202);
+  }
+
+  const imageUrls = zhipuImageUrls(result);
+  if (!imageUrls.length) return imageCreationFailure(response, result, model.id, runtime);
+  return json({
+    taskId: null,
+    provider: ZHIPU_API_PROVIDER,
+    modelId: model.id,
+    status: "SUCCEEDED",
+    terminal: true,
+    imageUrls,
+  }, 202);
+}
+
+async function createAgnesImage(model, body, origin, runtime) {
+  const apiKey = runtimeEnv(runtime, "AGNES_API_KEY");
+  if (!apiKey) return json({ error: "Agnes AI 图片服务尚未配置" }, 503);
+  const data = prepareImageRequest(model, body);
+  const validationError = validateImageRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+  const imageSources = await Promise.all(data.images.map((source) => publicAgnesImageUrl(source, origin, runtime)));
+  const response = await fetchFor(runtime)(`${agnesBase(runtime)}/images/generations`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildAgnesImageRequest(model, data, imageSources)),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return imageCreationFailure(response, result, model.id, runtime);
+  const imageUrls = zhipuImageUrls(result);
+  if (!imageUrls.length) return imageCreationFailure(response, result, model.id, runtime);
+  return json({
+    taskId: null,
+    provider: "agnes",
+    modelId: model.id,
+    status: "SUCCEEDED",
+    terminal: true,
+    imageUrls,
+  }, 202);
 }
 
 async function imageCreationFailure(response, result, modelId, runtime) {
@@ -868,6 +1160,9 @@ async function createImage(request, runtime) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "请求内容必须是 JSON 对象" }, 400);
   const model = getImageModel(body.model);
   if (!model) return json({ error: "不支持该图片模型" }, 400);
+  if (freeModelsOnly(runtime) && !isFreeImageModel(model)) {
+    return json({ error: "当前工作台仅允许免费模型", paidModelBlocked: true, modelId: model.id }, 403);
+  }
 
   const unavailable = await readUnavailableModels(runtime);
   if (unavailable[model.id]) {
@@ -878,24 +1173,41 @@ async function createImage(request, runtime) {
       unavailableUntil: unavailable[model.id].until,
     }, 429);
   }
+  if (model.provider === ZHIPU_API_PROVIDER) return createZhipuImage(model, body, runtime);
+  if (model.provider === "agnes") return createAgnesImage(model, body, new URL(request.url).origin, runtime);
   const apiKey = runtimeEnv(runtime, "DASHSCOPE_API_KEY");
   if (!apiKey) return json({ error: "阿里图片服务尚未配置" }, 503);
 
   const data = prepareImageRequest(model, body);
   const validationError = validateImageRequest(model, data);
   if (validationError) return json({ error: validationError }, 400);
-  const { endpoint, payload } = buildDashscopeImageRequest(model, data);
+  const { endpoint, payload, async: asyncRequest = true } = buildDashscopeImageRequest(model, data);
   const response = await fetchFor(runtime)(`${dashscopeBase(runtime)}${endpoint}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "X-DashScope-Async": "enable",
+      ...(asyncRequest ? { "X-DashScope-Async": "enable" } : {}),
     },
     body: JSON.stringify(payload),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result?.output?.task_id) return imageCreationFailure(response, result, model.id, runtime);
+  if (!response.ok) return imageCreationFailure(response, result, model.id, runtime);
+  if (!asyncRequest) {
+    const imageUrls = imageUrlsFromOutput(result?.output);
+    if (imageUrls.length) {
+      return json({
+        taskId: null,
+        provider: "dashscope",
+        modelId: model.id,
+        status: "SUCCEEDED",
+        terminal: true,
+        imageUrls,
+        size: result?.usage?.size || null,
+      }, 202);
+    }
+  }
+  if (!result?.output?.task_id) return imageCreationFailure(response, result, model.id, runtime);
   return json({
     taskId: result.output.task_id,
     provider: "dashscope",
@@ -906,12 +1218,16 @@ async function createImage(request, runtime) {
 
 async function getModelAvailability(runtime) {
   const unavailable = await readUnavailableModels(runtime);
-  const unavailableCount = VIDEO_MODELS.filter((model) => unavailable[model.id]).length;
-  const unavailableImageCount = IMAGE_MODELS.filter((model) => unavailable[model.id]).length;
-  const accessDisabled = runtimeEnv(runtime, "VIDEO_ACCESS_DISABLED") === "true";
+  const onlyFree = freeModelsOnly(runtime);
+  const visibleVideoModels = onlyFree ? VIDEO_MODELS.filter(isFreeVideoModel) : VIDEO_MODELS;
+  const visibleImageModels = onlyFree ? IMAGE_MODELS.filter(isFreeImageModel) : IMAGE_MODELS;
+  const unavailableCount = visibleVideoModels.filter((model) => unavailable[model.id]).length;
+  const unavailableImageCount = visibleImageModels.filter((model) => unavailable[model.id]).length;
+  const accessDisabled = accessProtectionDisabled(runtime);
   return json({
-    availableCount: VIDEO_MODELS.length - unavailableCount,
-    imageAvailableCount: IMAGE_MODELS.length - unavailableImageCount,
+    availableCount: visibleVideoModels.length - unavailableCount,
+    imageAvailableCount: visibleImageModels.length - unavailableImageCount,
+    freeOnly: onlyFree,
     unavailable: Object.entries(unavailable).map(([modelId, item]) => ({ modelId, ...item })),
     accessRequired: !accessDisabled,
     accessConfigured: accessDisabled || Boolean(runtimeEnv(runtime, "VIDEO_ACCESS_TOKEN")),
@@ -994,6 +1310,51 @@ async function getDashscopeVideo(taskId, runtime) {
   });
 }
 
+async function getZhipuVideo(taskId, runtime) {
+  const apiKey = runtimeEnv(runtime, "ZHIPU_API_KEY");
+  if (!apiKey) return json({ error: "Zhipu AI 视频服务尚未配置" }, 503);
+  const response = await fetchFor(runtime)(`${zhipuBase(runtime)}/async-result/${encodeURIComponent(taskId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return json({ error: upstreamMessage(result, "Zhipu AI 视频任务查询失败") }, response.status || 502);
+  const status = zhipuTaskStatus(result.task_status || result.status);
+  const video = Array.isArray(result.video_result) ? result.video_result[0] : null;
+  return json({
+    taskId,
+    provider: ZHIPU_API_PROVIDER,
+    status,
+    terminal: TERMINAL_STATUSES.has(status),
+    videoUrl: video?.url || result.video_url || null,
+    progress: status === "SUCCEEDED" ? 100 : status === "RUNNING" ? 58 : 12,
+    seconds: video?.duration || null,
+    size: video?.resolution || null,
+    error: status === "FAILED" ? upstreamMessage(result, "Zhipu AI 视频生成失败") : null,
+  });
+}
+
+async function getZhipuImage(taskId, runtime) {
+  const apiKey = runtimeEnv(runtime, "ZHIPU_API_KEY");
+  if (!apiKey) return json({ error: "Zhipu AI 图片服务尚未配置" }, 503);
+  const response = await fetchFor(runtime)(`${zhipuBase(runtime)}/async-result/${encodeURIComponent(taskId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return json({ error: upstreamMessage(result, "Zhipu AI 图片任务查询失败") }, response.status || 502);
+  const imageUrls = zhipuImageUrls(result);
+  const status = zhipuTaskStatus(result.task_status || result.status || (imageUrls.length ? "SUCCESS" : "PROCESSING"));
+  return json({
+    taskId,
+    provider: ZHIPU_API_PROVIDER,
+    status,
+    terminal: TERMINAL_STATUSES.has(status),
+    imageUrls: status === "SUCCEEDED" ? imageUrls : [],
+    progress: status === "SUCCEEDED" ? 100 : status === "RUNNING" ? 58 : 12,
+    size: result.size || null,
+    error: status === "FAILED" ? upstreamMessage(result, "Zhipu AI 图片生成失败") : null,
+  });
+}
+
 function imageUrlsFromOutput(output) {
   const legacy = Array.isArray(output?.results) ? output.results.map((item) => item?.url).filter(Boolean) : [];
   const choices = Array.isArray(output?.choices)
@@ -1028,7 +1389,7 @@ async function getAgnesVideo(taskId, videoId, runtime) {
   const apiKey = runtimeEnv(runtime, "AGNES_API_KEY");
   if (!apiKey) return json({ error: "Agnes 视频服务尚未配置" }, 503);
   const lookupId = videoId || taskId;
-  const response = await fetchFor(runtime)(`${AGNES_API_BASE}/agnesapi?video_id=${encodeURIComponent(lookupId)}`, {
+  const response = await fetchFor(runtime)(`${agnesRoot(runtime)}/agnesapi?video_id=${encodeURIComponent(lookupId)}`, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   const result = await response.json().catch(() => ({}));
@@ -1042,7 +1403,7 @@ async function getAgnesVideo(taskId, videoId, runtime) {
     terminal: ["SUCCEEDED", "FAILED", "UNKNOWN"].includes(status),
     // Agnes returns the completed asset under metadata.url; keep the older
     // top-level field as a fallback for tasks created by earlier API versions.
-    videoUrl: result.metadata?.url || result.url || null,
+    videoUrl: result.metadata?.url || result.video_url || result.remixed_from_video_id || result.url || null,
     progress: Number.isFinite(Number(result.progress)) ? Number(result.progress) : (status === "SUCCEEDED" ? 100 : null),
     seconds: result.seconds || null,
     size: result.size || null,
@@ -1090,7 +1451,7 @@ function sameSecret(left, right) {
 }
 
 function authorizeRequest(request, runtime) {
-  if (runtimeEnv(runtime, "VIDEO_ACCESS_DISABLED") === "true") return null;
+  if (accessProtectionDisabled(runtime)) return null;
   const expected = runtimeEnv(runtime, "VIDEO_ACCESS_TOKEN");
   if (!expected) {
     return json({
@@ -1143,7 +1504,13 @@ function allowedDownloadUrl(value) {
         || hostname === "agnes-ai.space"
         || hostname.endsWith(".agnes-ai.space")
         || hostname === "x.ai"
-        || hostname.endsWith(".x.ai"));
+        || hostname.endsWith(".x.ai")
+        || hostname === "bigmodel.cn"
+        || hostname.endsWith(".bigmodel.cn")
+        || hostname === "chatglm.cn"
+        || hostname.endsWith(".chatglm.cn")
+        || hostname === "zhipuai.cn"
+        || hostname.endsWith(".zhipuai.cn"));
   } catch {
     return false;
   }
@@ -1226,12 +1593,18 @@ export async function handleVideoApiRequest(request, runtime = {}) {
         const provider = url.searchParams.get("provider");
         if (provider === "agnes") return getAgnesVideo(taskMatch[1], url.searchParams.get("video_id"), runtime);
         if (provider === "sub2api_grok") return getGrokVideo(taskMatch[1], runtime);
+        if (provider === ZHIPU_API_PROVIDER) return getZhipuVideo(taskMatch[1], runtime);
         return getDashscopeVideo(taskMatch[1], runtime);
       })();
     }
     const imageTaskMatch = url.pathname.match(/^\/api\/images\/([a-zA-Z0-9_-]+)$/);
     if (imageTaskMatch && request.method === "GET") {
-      return protectedRoute("status", () => getDashscopeImage(imageTaskMatch[1], runtime))();
+      return protectedRoute("status", () => {
+        const provider = url.searchParams.get("provider");
+        return provider === ZHIPU_API_PROVIDER
+          ? getZhipuImage(imageTaskMatch[1], runtime)
+          : getDashscopeImage(imageTaskMatch[1], runtime);
+      })();
     }
     return json({ error: "未找到请求的接口" }, 404);
   } catch (error) {

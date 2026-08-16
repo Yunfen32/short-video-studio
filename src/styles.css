@@ -13,6 +13,7 @@
   --signal: #c6ff4a;
   --amber: #ffb800;
   --red: #ff3b30;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 * {
@@ -67,6 +68,22 @@ a.disabled {
   pointer-events: none;
 }
 
+button:not(:disabled),
+.icon-action:not(:disabled),
+.upload-tile,
+.image-model-list button,
+.model-family-main,
+.task-tabs button,
+.workflow-groups button {
+  transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms ease-out;
+}
+
+button:not(:disabled):active,
+.icon-action:not(:disabled):active,
+.upload-tile:active {
+  transform: translateY(1px);
+}
+
 button,
 label,
 summary,
@@ -80,8 +97,8 @@ select {
 }
 
 .topbar {
-  min-height: 78px;
-  padding: 14px 24px;
+  min-height: 74px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--line-strong);
   display: flex;
   align-items: center;
@@ -106,6 +123,18 @@ select {
   line-height: 1;
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.brand-block h1,
+.panel-heading h2,
+.section-heading h2,
+.task-tabs button strong,
+.model-family-main > strong,
+.image-model-list strong,
+.primary-action,
+.subject-block strong,
+.image-empty-state strong {
+  text-wrap: balance;
 }
 
 .service-metrics {
@@ -302,7 +331,7 @@ select {
 
 .workflow-groups button {
   min-width: 0;
-  height: 62px;
+  height: 58px;
   padding: 0 18px;
   border: 0;
   border-right: 1px solid var(--line);
@@ -328,6 +357,10 @@ select {
   color: var(--black);
 }
 
+.workflow-groups button.active svg {
+  stroke-width: 2.5;
+}
+
 .workflow-groups button span {
   min-width: 0;
   font-size: 13px;
@@ -342,7 +375,7 @@ select {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(540px, 0.92fr) minmax(500px, 1.08fr);
+  grid-template-columns: minmax(620px, 1.02fr) minmax(520px, 0.98fr);
   align-items: start;
 }
 
@@ -355,12 +388,12 @@ select {
 .model-console,
 .input-console,
 .settings-console {
-  padding: 26px 24px;
+  padding: 22px 24px;
   border-bottom: 1px solid var(--line-strong);
 }
 
 .section-heading {
-  margin-bottom: 18px;
+  margin-bottom: 15px;
   display: grid;
   grid-template-columns: 36px 1fr;
   gap: 12px;
@@ -389,6 +422,16 @@ select {
   overflow-wrap: anywhere;
 }
 
+.section-heading h2::after {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 2px;
+  margin-left: 8px;
+  vertical-align: middle;
+  background: var(--signal);
+}
+
 .task-tabs {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -398,8 +441,8 @@ select {
 
 .task-tabs button {
   min-width: 0;
-  min-height: 112px;
-  padding: 14px;
+  min-height: 92px;
+  padding: 13px 14px;
   border: 0;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -419,6 +462,13 @@ select {
   background: var(--surface-active);
   border-top: 3px solid var(--signal);
   padding-top: 12px;
+}
+
+.task-tabs button:focus-visible,
+.model-family-main:focus-visible,
+.image-model-list button:focus-visible {
+  position: relative;
+  z-index: 1;
 }
 
 .task-tabs button strong {
@@ -445,7 +495,7 @@ select {
 
 .model-family-row {
   min-width: 0;
-  min-height: 132px;
+  min-height: 126px;
   border-bottom: 1px solid var(--line);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 190px;
@@ -461,9 +511,13 @@ select {
   border-left: 3px solid var(--signal);
 }
 
+.model-family-row.active .model-family-main {
+  box-shadow: inset 0 2px 0 var(--signal);
+}
+
 .model-family-main {
   min-width: 0;
-  padding: 16px 18px;
+  padding: 15px 18px;
   border: 0;
   border-right: 1px solid var(--line);
   background: transparent;
@@ -522,7 +576,7 @@ select {
 
 .variant-select {
   min-width: 0;
-  padding: 15px 14px;
+  padding: 14px;
   display: grid;
   align-content: center;
   gap: 7px;
@@ -550,6 +604,70 @@ select {
   overflow-wrap: anywhere;
 }
 
+.model-example {
+  grid-column: 1 / -1;
+  min-width: 0;
+  min-height: 58px;
+  padding: 9px 12px 9px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--black);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.model-example-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: auto minmax(110px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.model-example-copy > span {
+  color: var(--signal);
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.model-example-copy > strong {
+  color: var(--white);
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+.model-example-copy > small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.example-load {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--white);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.example-load:hover:not(:disabled) {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
 .empty-model-state {
   margin: 0;
   padding: 22px;
@@ -559,10 +677,12 @@ select {
 
 .route-strip {
   min-width: 0;
-  padding: 16px 24px;
+  min-height: 58px;
+  padding: 11px 24px 11px 21px;
   border-bottom: 1px solid var(--line-strong);
-  background: var(--signal);
-  color: var(--black);
+  border-left: 3px solid var(--signal);
+  background: var(--surface-raised);
+  color: var(--white);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 0.78fr) auto minmax(0, 0.62fr);
   gap: 12px;
@@ -576,6 +696,7 @@ select {
 }
 
 .route-strip span {
+  color: var(--muted);
   font-size: 8px;
   font-weight: 700;
 }
@@ -584,6 +705,10 @@ select {
   font-size: 10px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.route-strip > svg {
+  color: var(--signal);
 }
 
 .field {
@@ -657,6 +782,19 @@ select {
 
 .prompt-field {
   position: relative;
+}
+
+.prompt-field textarea {
+  min-height: 138px;
+  padding-bottom: 30px;
+}
+
+.image-prompt-field {
+  width: 100%;
+}
+
+.image-reference-grid + .image-prompt-field {
+  margin-top: 20px;
 }
 
 .prompt-field > small {
@@ -929,9 +1067,7 @@ select {
 }
 
 .action-row {
-  position: sticky;
-  bottom: 0;
-  z-index: 5;
+  position: static;
   padding: 18px 24px;
   border-top: 1px solid var(--line-strong);
   background: var(--black);
@@ -965,6 +1101,10 @@ select {
   border-color: var(--white);
 }
 
+.primary-action:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .primary-action:disabled {
   border-color: var(--line-strong);
   background: var(--surface-raised);
@@ -973,6 +1113,7 @@ select {
 
 .action-note {
   margin: 7px 0 0;
+  min-height: 22px;
   font-size: 8px;
   line-height: 1.35;
 }
@@ -1011,8 +1152,27 @@ select {
   background: var(--surface);
 }
 
+.preview-panel::before {
+  content: "";
+  display: block;
+  height: 3px;
+  background: var(--line);
+}
+
+.preview-panel:has(.preview-model-state.status-active)::before {
+  background: var(--amber);
+}
+
+.preview-panel:has(.preview-model-state.status-success)::before {
+  background: var(--signal);
+}
+
+.preview-panel:has(.preview-model-state.status-error)::before {
+  background: var(--red);
+}
+
 .preview-toolbar {
-  min-height: 70px;
+  min-height: 68px;
   padding: 12px 18px;
   border-bottom: 1px solid var(--line-strong);
   display: grid;
@@ -1060,6 +1220,26 @@ select {
   color: var(--signal);
 }
 
+.preview-model-state.status-active {
+  color: var(--amber);
+}
+
+.preview-model-state.status-active svg {
+  color: var(--amber);
+}
+
+.preview-model-state.status-success {
+  color: var(--signal);
+}
+
+.preview-model-state.status-error {
+  color: var(--red);
+}
+
+.preview-model-state.status-error svg {
+  color: var(--red);
+}
+
 .preview-model-state span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1072,7 +1252,7 @@ select {
 }
 
 .video-stage {
-  min-height: calc(100vh - 226px);
+  min-height: calc(100vh - 218px);
   padding: 24px;
   border-bottom: 1px solid var(--line-strong);
   background: var(--black);
@@ -1303,6 +1483,11 @@ select {
   text-align: center;
 }
 
+.result-eyebrow {
+  color: var(--muted);
+  font-size: 8px;
+}
+
 .image-empty-state svg {
   color: var(--signal);
 }
@@ -1378,6 +1563,59 @@ select {
   }
 }
 
+@media (min-width: 1181px) {
+  .video-app-shell,
+  .image-app-shell {
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .video-app-shell .workspace {
+    height: calc(100vh - 132px);
+    align-items: stretch;
+  }
+
+  .video-app-shell:has(.demo-strip) .workspace {
+    height: calc(100vh - 178px);
+  }
+
+  .image-app-shell .workspace {
+    height: calc(100vh - 74px);
+    align-items: stretch;
+  }
+
+  .video-app-shell .control-panel,
+  .image-app-shell .control-panel {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-color: var(--line-strong) var(--black);
+    scrollbar-width: thin;
+  }
+
+  .video-app-shell .preview-panel,
+  .image-app-shell .preview-panel {
+    position: relative;
+    top: auto;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .video-app-shell .video-stage,
+  .image-app-shell .image-result-stage {
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .video-app-shell .preview-toolbar,
+  .image-app-shell .preview-toolbar,
+  .video-app-shell .result-readout,
+  .image-app-shell .result-readout {
+    flex: 0 0 auto;
+  }
+}
+
 @media (max-width: 1180px) {
   .workspace {
     grid-template-columns: 1fr;
@@ -1405,9 +1643,6 @@ select {
     max-height: 570px;
   }
 
-  .action-row {
-    position: static;
-  }
 }
 
 @media (max-width: 780px) {
@@ -1417,8 +1652,11 @@ select {
   }
 
   .topbar-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(136px, 0.72fr);
     align-items: stretch;
-    flex-direction: column;
+    gap: 8px;
   }
 
   .studio-switch {
@@ -1435,7 +1673,12 @@ select {
 
   .service-metrics {
     width: 100%;
+    grid-column: 1 / -1;
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .image-app-shell .studio-switch {
+    grid-column: 1 / -1;
   }
 
   .access-strip {
@@ -1488,6 +1731,19 @@ select {
     border-bottom: 1px solid var(--line);
   }
 
+  .model-example {
+    grid-column: 1;
+  }
+
+  .model-example-copy {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 5px 10px;
+  }
+
+  .model-example-copy > small {
+    grid-column: 1 / -1;
+  }
+
   .route-strip {
     display: flex;
     overflow-x: auto;
@@ -1503,6 +1759,10 @@ select {
 
   .preview-toolbar {
     grid-template-columns: 1fr auto;
+  }
+
+  .brand-block h1 {
+    font-size: 26px;
   }
 
   .preview-model-state {
@@ -1555,6 +1815,72 @@ select {
 
   .service-metrics strong {
     font-size: 13px;
+  }
+
+  .topbar {
+    gap: 14px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+
+  .brand-block h1 {
+    font-size: 24px;
+    line-height: 1.1;
+  }
+
+  .brand-block p {
+    margin-bottom: 6px;
+    font-size: 9px;
+  }
+
+  .topbar-controls {
+    grid-template-columns: minmax(0, 1fr) 122px;
+  }
+
+  .studio-switch,
+  .mode-toggle {
+    min-height: 46px;
+  }
+
+  .studio-switch button {
+    min-width: 0;
+  }
+
+  .service-metrics > div {
+    min-height: 46px;
+    padding: 8px 9px;
+  }
+
+  .section-heading {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .section-heading h2 {
+    font-size: 14px;
+  }
+
+  .variant-select {
+    padding: 12px 16px;
+  }
+
+  .model-example {
+    min-height: 0;
+    padding: 11px 16px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-example-copy > small {
+    display: -webkit-box;
+    max-height: 32px;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .example-load {
+    width: 100%;
   }
 
   .access-strip label {

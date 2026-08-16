@@ -2,7 +2,7 @@ const integerRange = (start, end) => Array.from({ length: end - start + 1 }, (_,
 const TEXT_DURATIONS = integerRange(2, 15);
 const REFERENCE_DURATIONS = integerRange(2, 10);
 const HAPPYHORSE_DURATIONS = integerRange(3, 15);
-const AGNES_DURATIONS = integerRange(3, 18);
+const AGNES_DURATIONS = [3, 5, 7, 10, 18];
 const VIDEO_RESOLUTIONS = ["720P", "1080P"];
 const STANDARD_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4"];
 const HAPPYHORSE_RATIOS = [...STANDARD_RATIOS, "4:5", "5:4", "9:21", "21:9"];
@@ -142,6 +142,19 @@ const MODEL_CATALOG = [
     summary: "有声、多镜头叙事",
   },
   {
+    id: "wan2.6-t2v-us",
+    label: "万相 2.6 文生视频 US",
+    family: "Wan 2.6",
+    provider: "dashscope",
+    category: "text",
+    protocol: "t2vLegacy",
+    supportsAudio: true,
+    durations: [5, 10, 15],
+    resolutions: VIDEO_RESOLUTIONS,
+    ratios: true,
+    summary: "美国地域专用版本",
+  },
+  {
     id: "wan2.5-t2v-preview",
     label: "万相 2.5 文生视频",
     family: "Wan 2.5",
@@ -255,6 +268,7 @@ const MODEL_CATALOG = [
   ...[
     ["wan2.6-i2v", "万相 2.6 图生视频", "有声、多镜头"],
     ["wan2.6-i2v-flash", "万相 2.6 图生视频 Flash", "快速生成、可选音频"],
+    ["wan2.6-i2v-us", "万相 2.6 图生视频 US", "美国地域专用版本"],
   ].map(([id, label, summary]) => ({
     id,
     label,
@@ -340,7 +354,8 @@ const MODEL_CATALOG = [
     resolutions: VIDEO_RESOLUTIONS,
     ratios: true,
     ratioOptions: STANDARD_RATIOS,
-    summary: "文字、单图与关键帧生成",
+    summary: "文字、单图与关键帧生成，支持同步音频",
+    outputAudio: true,
   },
   {
     id: "grok-imagine-video",
@@ -449,6 +464,23 @@ const MODEL_CATALOG = [
     summary: "指令编辑、参考图替换",
   },
   {
+    id: "wanx2.1-vace-plus",
+    label: "万相 2.1 视频编辑 VACE",
+    family: "Wan 2.1",
+    provider: "dashscope",
+    category: "edit",
+    protocol: "vace",
+    imageMin: 0,
+    imageMax: 2,
+    requiresVideo: true,
+    promptOptional: false,
+    durationMode: "truncate",
+    durations: [0, 5],
+    resolutions: ["720P"],
+    ratios: false,
+    summary: "多图参考、视频重绘与视频延展",
+  },
+  {
     id: "happyhorse-1.0-video-edit",
     label: "HappyHorse 1.0 视频编辑",
     family: "HappyHorse",
@@ -496,6 +528,37 @@ const MODEL_CATALOG = [
     durations: [5, 10, 15, 30],
     resolutions: ["720P"],
     summary: "保留动作与场景替换角色",
+  },
+  {
+    id: "wan2.2-s2v",
+    label: "万相 2.2 数字人对口型",
+    family: "Wan 2.2",
+    provider: "dashscope",
+    category: "edit",
+    protocol: "s2v",
+    imageMin: 1,
+    imageMax: 1,
+    requiresAudio: true,
+    promptOptional: true,
+    durationMode: "source",
+    durations: [5, 10, 15, 20],
+    resolutions: ["480P", "720P"],
+    summary: "人物图像 + 人声音频，自动口型与表演",
+  },
+  {
+    id: "cogvideox-flash",
+    label: "CogVideoX-Flash",
+    family: "CogVideoX",
+    provider: "zhipu",
+    category: "text",
+    protocol: "zhipuVideo",
+    featured: true,
+    supportsAudio: true,
+    outputAudio: true,
+    durations: [5, 10],
+    resolutions: ["720P", "1080P", "4K"],
+    ratios: true,
+    summary: "Free video generation with AI audio, 4K and 60fps support",
   },
 ];
 
@@ -564,6 +627,17 @@ function workflowCapabilitiesFor(model) {
       }),
     };
   }
+  if (model.protocol === "s2v") {
+    return {
+      "first-frame": capability({
+        imageMin: 1,
+        imageMax: 1,
+        imageMode: "first_frame",
+        audioMode: "required_input_audio",
+        promptOptional: true,
+      }),
+    };
+  }
   if (model.protocol === "kf2vLegacy") {
     return {
       "first-last-frame": capability({ imageMin: 2, imageMax: 2, imageMode: "first_last", promptOptional: true }),
@@ -581,6 +655,12 @@ function workflowCapabilitiesFor(model) {
       "text-to-video": capability(),
       "first-frame": capability({ imageMin: 1, imageMax: 1, imageMode: "first_frame" }),
       "multi-reference": capability({ imageMin: 1, imageMax: model.imageMax, imageMode: "reference" }),
+    };
+  }
+  if (model.protocol === "zhipuVideo") {
+    return {
+      "text-to-video": capability({ audioMode: "output_audio" }),
+      "first-frame": capability({ imageMin: 1, imageMax: 1, imageMode: "first_frame", audioMode: "output_audio", promptOptional: true }),
     };
   }
   if (model.protocol === "happyhorseR2v") {
@@ -612,6 +692,16 @@ function workflowCapabilitiesFor(model) {
         imageMode: "reference",
         videoMode: "required_source",
         promptOptional: model.promptOptional,
+      }),
+    };
+  }
+  if (model.protocol === "vace") {
+    return {
+      "video-edit": capability({
+        imageMax: model.imageMax,
+        imageMode: "reference",
+        videoMode: "required_source",
+        promptOptional: false,
       }),
     };
   }
@@ -652,6 +742,7 @@ function workflowCapabilitiesFor(model) {
 function modelControlsFor(model) {
   const isAgnes = model.protocol === "agnes";
   const isGrokVideo = model.protocol === "grokVideo";
+  const isZhipuVideo = model.protocol === "zhipuVideo";
   const isHappyHorse = model.protocol.startsWith("happyhorse");
   const isAnimation = model.protocol === "animateMove" || model.protocol === "animateMix";
   const isLegacyReference = model.protocol === "r2vLegacy";
@@ -659,9 +750,9 @@ function modelControlsFor(model) {
   return {
     durationMode: model.durationMode || "output",
     supportsWatermark: !isAgnes && !isGrokVideo,
-    supportsPromptExtend: !isAgnes && !isGrokVideo && !isHappyHorse && !isAnimation && !isLegacyReference,
-    supportsNegativePrompt: isAgnes || (!isGrokVideo && !isHappyHorse && !isAnimation),
-    supportsSeed: !isGrokVideo && !isAnimation && !isLegacyReference,
+    supportsPromptExtend: !isAgnes && !isGrokVideo && !isZhipuVideo && !isHappyHorse && !isAnimation && !isLegacyReference,
+    supportsNegativePrompt: isAgnes || (!isGrokVideo && !isZhipuVideo && !isHappyHorse && !isAnimation),
+    supportsSeed: !isGrokVideo && !isZhipuVideo && !isAnimation && !isLegacyReference,
     supportsAudioSetting: Boolean(model.supportsAudioSetting),
     ratioOptions,
     outputAudio: Boolean(
@@ -695,7 +786,8 @@ export const VIDEO_MODELS = MODEL_CATALOG.map((model) => {
     ...controls,
     providerLabel: model.provider === "agnes"
       ? "Agnes AI"
-      : model.provider === "sub2api_grok" ? "Sub2API Grok" : "阿里云百炼",
+      : model.provider === "sub2api_grok" ? "Sub2API Grok"
+        : model.provider === "zhipu" ? "Zhipu AI" : "阿里云百炼",
     familyLabel: model.family.replace(/^Wan /, "万相 "),
     variantLabel: variantLabelFor(model),
     workflowCapabilities: Object.fromEntries(

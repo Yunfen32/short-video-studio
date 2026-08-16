@@ -7,12 +7,16 @@ import {
   supportsWorkflow,
   VIDEO_MODELS,
 } from '../shared/video-models.mjs';
+import { getImageModel } from '../shared/image-models.mjs';
 import {
   buildAgnesPayload,
+  buildAgnesImageRequest,
   buildDashscopeRequest,
   buildGrokVideoRequest,
+  buildZhipuVideoRequest,
   handleVideoApiRequest,
   normalizePromptMentions,
+  prepareImageRequest,
   prepareRequestData,
   quotaIsExhausted,
   validateRequest,
@@ -75,6 +79,59 @@ test('共享 API 在两个托管入口使用同一模型目录和访问保护', 
     }), runtime);
     assert.equal(denied.status, 401);
   }
+});
+
+test('免费模型保护只暴露并允许免费视频模型', async () => {
+  const runtime = memoryRuntime({ VIDEO_ACCESS_DISABLED: 'true', FREE_MODELS_ONLY: 'true', ZHIPU_API_KEY: 'zhipu-key' });
+  const modelsResponse = await handleVideoApiRequest(new Request('https://studio.example/api/models'), runtime);
+  const availability = await modelsResponse.json();
+  assert.equal(availability.freeOnly, true);
+  assert.equal(availability.availableCount, 2);
+  assert.equal(availability.imageAvailableCount, 3);
+
+  const paidAttempt = await handleVideoApiRequest(new Request('https://studio.example/api/videos', {
+    method: 'POST',
+    body: JSON.stringify({ model: 'wan2.7-t2v', workflow: 'text-to-video', prompt: 'test' }),
+  }), runtime);
+  assert.equal(paidAttempt.status, 403);
+  assert.equal((await paidAttempt.json()).paidModelBlocked, true);
+});
+
+test('Agnes 免费图片模型使用服务端密钥并支持参考图', async () => {
+  const runtime = memoryRuntime({ VIDEO_ACCESS_DISABLED: 'true', FREE_MODELS_ONLY: 'true', AGNES_API_KEY: 'agnes-key' });
+  const calls = [];
+  runtime.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return Response.json({ data: [{ url: 'https://cdn.example.com/agnes-image.png' }] });
+  };
+
+  const created = await handleVideoApiRequest(new Request('https://studio.example/api/images', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'agnes-image-2.1-flash',
+      workflow: 'image-edit',
+      prompt: '把背景改成夜晚的城市灯光',
+      images: ['https://assets.example.com/reference.png'],
+      quality: '2K',
+      count: 1,
+    }),
+  }), runtime);
+  assert.equal(created.status, 202);
+  assert.deepEqual(await created.json(), {
+    taskId: null,
+    provider: 'agnes',
+    modelId: 'agnes-image-2.1-flash',
+    status: 'SUCCEEDED',
+    terminal: true,
+    imageUrls: ['https://cdn.example.com/agnes-image.png'],
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://apihub.agnes-ai.com/v1/images/generations');
+  const payload = JSON.parse(calls[0].options.body);
+  assert.equal(payload.model, 'agnes-image-2.1-flash');
+  assert.deepEqual(payload.extra_body.image, ['https://assets.example.com/reference.png']);
+  assert.equal(payload.extra_body.response_format, 'url');
 });
 
 test('Netlify 与 Sites 入口都能加载共享后端适配器', async () => {
@@ -272,6 +329,23 @@ test('公开演示模式会优先于旧访问令牌，但仍通过统一的限�
   assert.equal(upload.status, 201);
 });
 
+test('托管入口未配置访问变量时自动进入公开演示模式', async () => {
+  for (const platform of ['netlify', 'sites']) {
+    const runtime = { ...memoryRuntime(), platform };
+    const models = await handleVideoApiRequest(new Request('https://studio.example/api/models'), runtime);
+    const availability = await models.json();
+    assert.equal(models.status, 200, platform);
+    assert.equal(availability.accessRequired, false, platform);
+
+    const upload = await handleVideoApiRequest(new Request('https://studio.example/api/reference-images', {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array([137, 80, 78, 71]),
+    }), runtime);
+    assert.equal(upload.status, 201, platform);
+  }
+});
+
 test('上传、生成和下载分别限流，参考图只允许受控写入', async () => {
   const runtime = memoryRuntime({
     VIDEO_ACCESS_TOKEN: 'studio-secret',
@@ -380,6 +454,7 @@ test('每个模型的每条工作流都能通过约束并构造请求', () => {
         resolution: model.resolutions[0],
         ratio: capability.ratioOptions[0] || '16:9',
         images: Array.from({ length: imageCount }, (_, index) => image('path-' + index)),
+        audioUrl: capability.audioMode === 'required_input_audio' ? 'https://assets.example.com/voice.mp3' : '',
         videoUrl: capability.videoMode.startsWith('required_') ? 'https://assets.example.com/source.mp4' : '',
       };
       const data = prepareRequestData(model, body);
@@ -390,6 +465,9 @@ test('每个模型的每条工作流都能通过约束并构造请求', () => {
       } else if (model.provider === 'sub2api_grok') {
         const urls = data.images.map((item) => item.source);
         assert.equal(buildGrokVideoRequest(model, data, urls).model, model.id);
+      } else if (model.provider === 'zhipu') {
+        const urls = data.images.map((item) => item.source);
+        assert.equal(buildZhipuVideoRequest(model, data, urls).model, model.id);
       } else {
         const request = buildDashscopeRequest(model, data);
         assert.ok(request.endpoint.startsWith('/api/'), `${model.id} / ${workflow}`);
@@ -431,6 +509,21 @@ test('Agnes 文生视频不发送空图片字段', () => {
   assert.equal('extra_body' in payload, false);
 });
 
+test('Agnes 图片请求按清晰度映射尺寸并保留无图文生图协议', () => {
+  const model = getImageModel('agnes-image-2.1-flash');
+  const data = prepareImageRequest(model, {
+    workflow: 'text-to-image',
+    prompt: '一间明亮的现代工作室',
+    quality: '2K',
+    count: 1,
+    images: [],
+  });
+  const payload = buildAgnesImageRequest(model, data, []);
+  assert.equal(payload.size, '1536x1536');
+  assert.equal('image' in payload.extra_body, false);
+  assert.equal(payload.extra_body.response_format, 'url');
+});
+
 test('Agnes 单图与多关键帧使用不同请求字段', () => {
   const model = getVideoModel('agnes-video-v2.0');
   const firstFrame = prepareRequestData(model, {
@@ -463,6 +556,7 @@ test('Agnes 清晰度会改变请求尺寸且只暴露真实控制项', () => {
   assert.equal(capability.supportsWatermark, false);
   assert.equal(capability.supportsPromptExtend, false);
   assert.equal(capability.supportsNegativePrompt, true);
+  assert.equal(capability.outputAudio, true);
 
   const low = prepareRequestData(model, {
     ...BASE_REQUEST,
@@ -478,6 +572,16 @@ test('Agnes 清晰度会改变请求尺寸且只暴露真实控制项', () => {
   const highPayload = buildAgnesPayload(high, []);
   assert.deepEqual([lowPayload.width, lowPayload.height], [1280, 720]);
   assert.deepEqual([highPayload.width, highPayload.height], [1920, 1080]);
+});
+
+test('Agnes 视频时长映射到官方合法帧数', () => {
+  const model = getVideoModel('agnes-video-v2.0');
+  assert.deepEqual(model.durations, [3, 5, 7, 10, 18]);
+  for (const duration of model.durations) {
+    const data = prepareRequestData(model, { ...BASE_REQUEST, duration, workflow: 'text-to-video' });
+    const payload = buildAgnesPayload(data, []);
+    assert.equal(payload.num_frames, { 3: 81, 5: 121, 7: 161, 10: 241, 18: 441 }[duration]);
+  }
 });
 
 test('HappyHorse 全系列使用各自协议和方括号图片引用', () => {
@@ -674,6 +778,52 @@ test('视频编辑区分保留原时长与截断，动画时长始终跟随源�
 
   const moveModel = getVideoModel('wan2.2-animate-move');
   assert.equal(getWorkflowCapability(moveModel, 'motion-transfer').durationMode, 'source');
+});
+
+test('S2V 需要人物音频并使用 image2video 音频驱动协议', () => {
+  const model = getVideoModel('wan2.2-s2v');
+  const missingAudio = prepareRequestData(model, {
+    ...BASE_REQUEST,
+    workflow: 'first-frame',
+    prompt: '',
+    images: [image('person')],
+    audioUrl: '',
+  });
+  assert.equal(validateRequest(model, missingAudio), '当前生成方式需要人物音频 URL');
+
+  const data = prepareRequestData(model, {
+    ...missingAudio,
+    audioUrl: 'https://assets.example.com/voice.mp3',
+    resolution: '720P',
+  });
+  assert.equal(validateRequest(model, data), null);
+  const request = buildDashscopeRequest(model, data);
+  assert.equal(request.endpoint, '/api/v1/services/aigc/image2video/video-synthesis');
+  assert.deepEqual(request.payload.input, {
+    image_url: image('person').source,
+    audio_url: 'https://assets.example.com/voice.mp3',
+  });
+  assert.deepEqual(request.payload.parameters, { resolution: '720P' });
+});
+
+test('VACE 按参考图用途构造视频编辑函数', () => {
+  const model = getVideoModel('wanx2.1-vace-plus');
+  const data = prepareRequestData(model, {
+    ...BASE_REQUEST,
+    workflow: 'video-edit',
+    duration: 0,
+    videoUrl: 'https://assets.example.com/source.mp4',
+    images: [image('person'), image('scene', 'background')],
+  });
+  assert.equal(validateRequest(model, data), null);
+  const payload = buildDashscopeRequest(model, data).payload;
+  assert.equal(payload.input.function, 'image_reference');
+  assert.deepEqual(payload.input.ref_images_url, data.images.map((item) => item.source));
+  assert.deepEqual(payload.parameters.obj_or_bg, ['obj', 'bg']);
+
+  const repaint = prepareRequestData(model, { ...data, images: [] });
+  assert.equal(validateRequest(model, repaint), null);
+  assert.equal(buildDashscopeRequest(model, repaint).payload.input.function, 'video_repainting');
 });
 
 test('语义化图片标签与旧 @参考图 标签同时兼容', () => {
