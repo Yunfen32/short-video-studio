@@ -12,10 +12,21 @@ import {
   supportsImageWorkflow,
 } from "./image-models.mjs";
 import { isFreeImageModel, isFreeVideoModel } from "./free-models.mjs";
+import { buildCreativeAgentPlan } from "./creative-agent.mjs";
+import {
+  buildSiliconFlowImageRequest,
+  buildSiliconFlowVideoRequest,
+  getSiliconFlowCatalog,
+  getSiliconFlowImageModel,
+  getSiliconFlowVideoModel,
+  siliconFlowImageUrls,
+  siliconFlowVideoStatus,
+} from "./siliconflow-models.mjs";
 
 const DEFAULT_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com";
 const DEFAULT_AGNES_API_BASE = "https://apihub.agnes-ai.com";
 const DEFAULT_ZHIPU_API_BASE = "https://open.bigmodel.cn/api/paas/v4";
+const DEFAULT_SILICONFLOW_API_BASE = "https://api.siliconflow.cn/v1";
 const IMAGE_QUALITY_SIZES = {
   "1K": "1024*1024",
   "2K": "2048*2048",
@@ -40,6 +51,7 @@ const AVAILABILITY_KEY = "state/unavailable-models";
 const MODEL_QUOTA_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const PROVIDER_BILLING_COOLDOWN_MS = 15 * 60 * 1000;
 const REFERENCE_IMAGE_TTL_MS = 24 * 60 * 60 * 1000;
+const AGENT_PLAN_TTL_MS = 10 * 60 * 1000;
 const MAX_REFERENCE_IMAGE_BYTES = 4 * 1024 * 1024;
 const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"]);
 
@@ -63,7 +75,26 @@ function runtimeNow(runtime) {
 }
 
 function freeModelsOnly(runtime) {
-  return runtimeEnv(runtime, FREE_MODELS_ONLY_ENV) === "true";
+  const configured = runtimeEnv(runtime, FREE_MODELS_ONLY_ENV);
+  if (configured) return configured === "true";
+  // 托管站点默认面向公开访问，只有显式设置为 false 才允许付费模型。
+  return runtime?.platform === "netlify" || runtime?.platform === "sites";
+}
+
+function modelProviderConfigured(model, runtime) {
+  const keyByProvider = {
+    agnes: "AGNES_API_KEY",
+    dashscope: "DASHSCOPE_API_KEY",
+    [ZHIPU_API_PROVIDER]: "ZHIPU_API_KEY",
+    siliconflow: "SILICONFLOW_API_KEY",
+    sub2api_grok: SUB2API_GROK.envKey,
+  };
+  const key = keyByProvider[model?.provider];
+  if (!key || !runtimeEnv(runtime, key)) return false;
+  if (model?.provider === "sub2api_grok") {
+    return runtimeEnv(runtime, "SUB2API_GROK_VIDEO_ENABLED") === "true";
+  }
+  return true;
 }
 
 function accessProtectionDisabled(runtime) {
@@ -89,6 +120,10 @@ function agnesBase(runtime) {
   return (runtimeEnv(runtime, "AGNES_API_BASE") || `${DEFAULT_AGNES_API_BASE}/v1`).replace(/\/$/, "");
 }
 
+function siliconflowBase(runtime) {
+  return (runtimeEnv(runtime, "SILICONFLOW_API_BASE") || DEFAULT_SILICONFLOW_API_BASE).replace(/\/$/, "");
+}
+
 function agnesRoot(runtime) {
   return agnesBase(runtime).replace(/\/v1$/, "");
 }
@@ -104,6 +139,12 @@ function validRemoteUrl(value, protocols) {
   } catch {
     return false;
   }
+}
+
+function referenceImageUrl(origin, key, accessToken) {
+  const url = new URL(`/api/reference-images/${encodeURIComponent(key)}`, origin);
+  url.searchParams.set("token", accessToken);
+  return url.href;
 }
 
 function dataImageBytes(value) {
@@ -201,14 +242,16 @@ async function publicAgnesImageUrl(source, origin, runtime) {
   if (runtime?.inlineReferenceImages) return source;
   const [, contentType, encoded] = match;
   const key = `agnes/${crypto.randomUUID()}.${referenceImageExtension(contentType.toLowerCase())}`;
+  const accessToken = crypto.randomUUID();
   if (!runtime?.storage) throw new Error("图片存储尚未配置");
   await runtime.storage.put(key, decodeBase64(encoded), {
     contentType: contentType.toLowerCase(),
     createdAt: runtimeNow(runtime),
+    accessToken,
   });
   const cleanup = runtime.storage.cleanupExpired?.("agnes/", runtimeNow(runtime) - REFERENCE_IMAGE_TTL_MS);
   scheduleBackground(runtime, cleanup);
-  return `${origin}/api/reference-images/${encodeURIComponent(key)}`;
+  return referenceImageUrl(origin, key, accessToken);
 }
 
 const IMAGE_ROLES = new Set([
@@ -682,10 +725,13 @@ async function modelCreationFailure(response, result, modelId, runtime, fallback
   const scope = quotaFailureScope(response, result);
   if (!scope) return json({ error: message }, response.status || 502);
 
-  const model = getVideoModel(modelId);
-  const modelIds = scope === "provider"
-    ? VIDEO_MODELS.filter((item) => item.provider === model?.provider).map((item) => item.id)
-    : [modelId];
+  const model = getVideoModel(modelId) || await getSiliconFlowVideoModel(modelId, runtime);
+  let providerModels = VIDEO_MODELS.filter((item) => item.provider === model?.provider);
+  if (model?.provider === "siliconflow") {
+    const catalog = await getSiliconFlowCatalog(runtime);
+    providerModels = catalog.videoModels;
+  }
+  const modelIds = scope === "provider" ? providerModels.map((item) => item.id) : [modelId];
   const cooldownMs = scope === "provider" ? PROVIDER_BILLING_COOLDOWN_MS : MODEL_QUOTA_COOLDOWN_MS;
   let unavailable = modelIds.map((item) => ({ modelId: item, reason: message, until: runtimeNow(runtime) + cooldownMs, scope }));
   try {
@@ -729,6 +775,30 @@ async function createDashscopeVideo(model, body, runtime) {
     provider: "dashscope",
     modelId: model.id,
     status: result.output.task_status || "PENDING",
+  }, 202);
+}
+
+async function createSiliconFlowVideo(model, body, origin, runtime) {
+  const apiKey = runtimeEnv(runtime, "SILICONFLOW_API_KEY");
+  if (!apiKey) return json({ error: "SiliconFlow 视频服务尚未配置" }, 503);
+  const data = prepareRequestData(model, body);
+  const validationError = validateRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+  const imageUrls = await Promise.all(data.images.map((item) => publicAgnesImageUrl(item.source, origin, runtime)));
+  const response = await fetchFor(runtime)(`${siliconflowBase(runtime)}/video/submit`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildSiliconFlowVideoRequest(model, data, imageUrls[0] || "")),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.requestId) {
+    return modelCreationFailure(response, result, model.id, runtime, "SiliconFlow 视频任务创建失败");
+  }
+  return json({
+    taskId: result.requestId,
+    provider: "siliconflow",
+    modelId: model.id,
+    status: "PENDING",
   }, 202);
 }
 
@@ -877,8 +947,11 @@ async function createVideo(request, runtime) {
     return json({ error: "请求内容不是有效的 JSON" }, 400);
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "请求内容必须是 JSON 对象" }, 400);
-  const model = getVideoModel(body.model);
+  const model = getVideoModel(body.model) || await getSiliconFlowVideoModel(body.model, runtime);
   if (!model) return json({ error: "不支持该视频模型" }, 400);
+  if (model.provider === "sub2api_grok" && !modelProviderConfigured(model, runtime)) {
+    return json({ error: "Sub2API Grok 视频协议尚未启用或验证" }, 503);
+  }
   if (freeModelsOnly(runtime) && !isFreeVideoModel(model)) {
     return json({ error: "当前工作台仅允许免费模型", paidModelBlocked: true, modelId: model.id }, 403);
   }
@@ -899,6 +972,7 @@ async function createVideo(request, runtime) {
   if (model.provider === "agnes") return createAgnesVideo(model, body, origin, runtime);
   if (model.provider === "sub2api_grok") return createGrokVideo(model, body, origin, runtime);
   if (model.provider === ZHIPU_API_PROVIDER) return createZhipuVideo(model, body, origin, runtime);
+  if (model.provider === "siliconflow") return createSiliconFlowVideo(model, body, origin, runtime);
   return createDashscopeVideo(model, body, runtime);
 }
 
@@ -1125,15 +1199,44 @@ async function createAgnesImage(model, body, origin, runtime) {
   }, 202);
 }
 
+async function createSiliconFlowImage(model, body, origin, runtime) {
+  const apiKey = runtimeEnv(runtime, "SILICONFLOW_API_KEY");
+  if (!apiKey) return json({ error: "SiliconFlow 图片服务尚未配置" }, 503);
+  const data = prepareImageRequest(model, body);
+  const validationError = validateImageRequest(model, data);
+  if (validationError) return json({ error: validationError }, 400);
+  const imageSources = await Promise.all(data.images.map((source) => publicAgnesImageUrl(source, origin, runtime)));
+  const response = await fetchFor(runtime)(`${siliconflowBase(runtime)}/images/generations`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildSiliconFlowImageRequest(model, { ...data, images: imageSources })),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return imageCreationFailure(response, result, model.id, runtime);
+  const imageUrls = siliconFlowImageUrls(result);
+  if (!imageUrls.length) return imageCreationFailure(response, result, model.id, runtime);
+  return json({
+    taskId: null,
+    provider: "siliconflow",
+    modelId: model.id,
+    status: "SUCCEEDED",
+    terminal: true,
+    imageUrls,
+  }, 202);
+}
+
 async function imageCreationFailure(response, result, modelId, runtime) {
   const message = upstreamMessage(result, "图片任务创建失败");
   const scope = quotaFailureScope(response, result);
   if (!scope) return json({ error: message }, response.status || 502);
 
-  const model = getImageModel(modelId);
-  const modelIds = scope === "provider"
-    ? IMAGE_MODELS.filter((item) => item.provider === model?.provider).map((item) => item.id)
-    : [modelId];
+  const model = getImageModel(modelId) || await getSiliconFlowImageModel(modelId, runtime);
+  let providerModels = IMAGE_MODELS.filter((item) => item.provider === model?.provider);
+  if (model?.provider === "siliconflow") {
+    const catalog = await getSiliconFlowCatalog(runtime);
+    providerModels = catalog.imageModels;
+  }
+  const modelIds = scope === "provider" ? providerModels.map((item) => item.id) : [modelId];
   const cooldownMs = scope === "provider" ? PROVIDER_BILLING_COOLDOWN_MS : MODEL_QUOTA_COOLDOWN_MS;
   let unavailable = modelIds.map((item) => ({ modelId: item, reason: message, until: runtimeNow(runtime) + cooldownMs, scope }));
   try {
@@ -1158,7 +1261,7 @@ async function createImage(request, runtime) {
     return json({ error: "请求内容不是有效的 JSON" }, 400);
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "请求内容必须是 JSON 对象" }, 400);
-  const model = getImageModel(body.model);
+  const model = getImageModel(body.model) || await getSiliconFlowImageModel(body.model, runtime);
   if (!model) return json({ error: "不支持该图片模型" }, 400);
   if (freeModelsOnly(runtime) && !isFreeImageModel(model)) {
     return json({ error: "当前工作台仅允许免费模型", paidModelBlocked: true, modelId: model.id }, 403);
@@ -1175,6 +1278,7 @@ async function createImage(request, runtime) {
   }
   if (model.provider === ZHIPU_API_PROVIDER) return createZhipuImage(model, body, runtime);
   if (model.provider === "agnes") return createAgnesImage(model, body, new URL(request.url).origin, runtime);
+  if (model.provider === "siliconflow") return createSiliconFlowImage(model, body, new URL(request.url).origin, runtime);
   const apiKey = runtimeEnv(runtime, "DASHSCOPE_API_KEY");
   if (!apiKey) return json({ error: "阿里图片服务尚未配置" }, 503);
 
@@ -1217,23 +1321,159 @@ async function createImage(request, runtime) {
 }
 
 async function getModelAvailability(runtime) {
-  const unavailable = await readUnavailableModels(runtime);
-  const onlyFree = freeModelsOnly(runtime);
-  const visibleVideoModels = onlyFree ? VIDEO_MODELS.filter(isFreeVideoModel) : VIDEO_MODELS;
-  const visibleImageModels = onlyFree ? IMAGE_MODELS.filter(isFreeImageModel) : IMAGE_MODELS;
-  const unavailableCount = visibleVideoModels.filter((model) => unavailable[model.id]).length;
-  const unavailableImageCount = visibleImageModels.filter((model) => unavailable[model.id]).length;
+  const catalog = await getAvailableModelCatalog(runtime);
   const accessDisabled = accessProtectionDisabled(runtime);
   return json({
-    availableCount: visibleVideoModels.length - unavailableCount,
-    imageAvailableCount: visibleImageModels.length - unavailableImageCount,
-    freeOnly: onlyFree,
-    unavailable: Object.entries(unavailable).map(([modelId, item]) => ({ modelId, ...item })),
+    availableCount: catalog.visibleVideoModels.length,
+    imageAvailableCount: catalog.visibleImageModels.length,
+    videoModels: catalog.visibleVideoModels,
+    imageModels: catalog.visibleImageModels,
+    siliconflow: catalog.siliconflow,
+    dots: catalog.dots,
+    freeOnly: catalog.onlyFree,
+    unavailable: Object.entries(catalog.unavailable).map(([modelId, item]) => ({ modelId, ...item })),
     accessRequired: !accessDisabled,
     accessConfigured: accessDisabled || Boolean(runtimeEnv(runtime, "VIDEO_ACCESS_TOKEN")),
     directAccess: accessDisabled,
     checkedAt: runtimeNow(runtime),
   });
+}
+
+async function getAvailableModelCatalog(runtime) {
+  const unavailable = await readUnavailableModels(runtime);
+  const onlyFree = freeModelsOnly(runtime);
+  const siliconflow = await getSiliconFlowCatalog(runtime);
+  const videoCatalog = [...VIDEO_MODELS, ...siliconflow.videoModels]
+    .filter((model, index, models) => models.findIndex((item) => item.id === model.id) === index);
+  const imageCatalog = [...IMAGE_MODELS, ...siliconflow.imageModels]
+    .filter((model, index, models) => models.findIndex((item) => item.id === model.id) === index);
+  const visibleVideoModels = (onlyFree ? videoCatalog.filter(isFreeVideoModel) : videoCatalog)
+    .filter((model) => modelProviderConfigured(model, runtime));
+  const visibleImageModels = (onlyFree ? imageCatalog.filter(isFreeImageModel) : imageCatalog)
+    .filter((model) => modelProviderConfigured(model, runtime));
+  return {
+    unavailable,
+    onlyFree,
+    visibleVideoModels: visibleVideoModels.filter((model) => !unavailable[model.id]),
+    visibleImageModels: visibleImageModels.filter((model) => !unavailable[model.id]),
+    siliconflow: {
+      configured: siliconflow.configured,
+      videoModelCount: siliconflow.videoModels.length,
+      imageModelCount: siliconflow.imageModels.length,
+      freeVideoModelCount: siliconflow.videoModels.filter(isFreeVideoModel).length,
+      freeImageModelCount: siliconflow.imageModels.filter(isFreeImageModel).length,
+      error: siliconflow.error,
+    },
+    // Dots 官方公开文档当前只定义文本、多模态理解和工具调用，未定义媒体生成端点。
+    // 仅反馈配置状态，避免将理解模型伪装成图片或视频生成模型。
+    dots: {
+      configured: Boolean(runtimeEnv(runtime, "DOTS_API_KEY")),
+      mediaGenerationSupported: false,
+      message: "Dots 当前仅支持多模态理解，不提供图片或视频生成模型",
+    },
+  };
+}
+
+function publicAgentPlan(plan) {
+  return {
+    kind: plan.kind,
+    workflow: plan.workflow,
+    modelId: plan.modelId,
+    modelLabel: plan.modelLabel,
+    provider: plan.provider,
+    summary: plan.summary,
+    prompt: plan.request.prompt,
+    brief: plan.brief,
+    output: plan.kind === "video"
+      ? { ratio: plan.request.ratio, duration: plan.request.duration, resolution: plan.request.resolution }
+      : { quality: plan.request.quality, count: plan.request.count },
+  };
+}
+
+async function resolveAgentPlan(request, runtime) {
+  let input;
+  try {
+    input = await request.json();
+  } catch {
+    return { errorResponse: json({ error: "请求内容不是有效的 JSON" }, 400) };
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { errorResponse: json({ error: "请求内容必须是 JSON 对象" }, 400) };
+  }
+
+  try {
+    const catalog = await getAvailableModelCatalog(runtime);
+    return { plan: buildCreativeAgentPlan(input, {
+      videoModels: catalog.visibleVideoModels,
+      imageModels: catalog.visibleImageModels,
+    }) };
+  } catch (error) {
+    return { errorResponse: json({ error: error instanceof Error ? error.message : "Agent 暂时无法制定生成计划" }, 400) };
+  }
+}
+
+function requestClientIdentifier(request, runtime) {
+  return runtime.clientId
+    || request.headers.get("cf-connecting-ip")
+    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || request.headers.get("user-agent")
+    || "anonymous";
+}
+
+async function agentPlanKey(request, runtime) {
+  return `state/agent-plan/${await rateLimitKey(requestClientIdentifier(request, runtime))}`;
+}
+
+async function resolveApprovedAgentPlan(request, runtime) {
+  let input;
+  try {
+    input = await request.json();
+  } catch {
+    return { errorResponse: json({ error: "请求内容不是有效的 JSON" }, 400) };
+  }
+  const planId = typeof input?.planId === "string" ? input.planId.trim() : "";
+  if (!planId) return { errorResponse: json({ error: "请先审核生成计划" }, 400) };
+  if (!runtime?.storage) return { errorResponse: json({ error: "计划存储尚未配置" }, 503) };
+
+  const stored = await runtime.storage.getJSON(await agentPlanKey(request, runtime));
+  if (!stored?.plan || !sameSecret(planId, stored.planId || "")) {
+    return { errorResponse: json({ error: "生成计划不存在或已被新的计划替换，请重新审核" }, 409) };
+  }
+  if (runtimeNow(runtime) > Number(stored.expiresAt)) {
+    return { errorResponse: json({ error: "生成计划已过期，请重新审核" }, 410) };
+  }
+  return { plan: stored.plan };
+}
+
+async function previewAgentPlan(request, runtime) {
+  const result = await resolveAgentPlan(request, runtime);
+  if (result.errorResponse) return result.errorResponse;
+  if (!runtime?.storage) return json({ error: "计划存储尚未配置" }, 503);
+  const planId = crypto.randomUUID();
+  const planKey = await agentPlanKey(request, runtime);
+  await runtime.storage.setJSON(planKey, {
+    planId,
+    plan: result.plan,
+    expiresAt: runtimeNow(runtime) + AGENT_PLAN_TTL_MS,
+  });
+  return json({ agentPlan: publicAgentPlan(result.plan), planId });
+}
+
+async function createAgentGeneration(request, runtime) {
+  const result = await resolveApprovedAgentPlan(request, runtime);
+  if (result.errorResponse) return result.errorResponse;
+  const { plan } = result;
+
+  const delegatedRequest = new Request(request.url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(plan.request),
+  });
+  const generation = plan.kind === "video"
+    ? await createVideo(delegatedRequest, runtime)
+    : await createImage(delegatedRequest, runtime);
+  const payload = await generation.json().catch(() => ({}));
+  return json({ ...payload, agentPlan: publicAgentPlan(plan) }, generation.status);
 }
 
 async function uploadReferenceImage(request, runtime) {
@@ -1250,16 +1490,18 @@ async function uploadReferenceImage(request, runtime) {
   }
   if (!runtime?.storage) return json({ error: "图片存储尚未配置" }, 503);
   const key = `uploads/${crypto.randomUUID()}.${referenceImageExtension(contentType)}`;
+  const accessToken = crypto.randomUUID();
   await runtime.storage.put(key, image, {
     contentType,
     createdAt: runtimeNow(runtime),
+    accessToken,
   });
   const cleanup = runtime.storage.cleanupExpired?.("uploads/", runtimeNow(runtime) - REFERENCE_IMAGE_TTL_MS);
   scheduleBackground(runtime, cleanup);
-  return json({ url: `${new URL(request.url).origin}/api/reference-images/${encodeURIComponent(key)}` }, 201);
+  return json({ url: referenceImageUrl(new URL(request.url).origin, key, accessToken) }, 201);
 }
 
-async function getReferenceImage(encodedKey, runtime) {
+async function getReferenceImage(encodedKey, request, runtime) {
   let key;
   try {
     key = decodeURIComponent(encodedKey);
@@ -1271,16 +1513,15 @@ async function getReferenceImage(encodedKey, runtime) {
   if (!runtime?.storage) return json({ error: "图片存储尚未配置" }, 503);
   const image = await runtime.storage.get(key);
   if (!image?.body) return json({ error: "未找到参考图" }, 404);
+  const accessToken = new URL(request.url).searchParams.get("token") || "";
+  if (!image.accessToken || !sameSecret(accessToken, image.accessToken)) return json({ error: "未找到参考图" }, 404);
   const createdAt = Number(image.createdAt) || 0;
   if (createdAt && runtimeNow(runtime) - createdAt >= REFERENCE_IMAGE_TTL_MS) {
     return json({ error: "参考图已过期" }, 404);
   }
-  const maxAge = createdAt
-    ? Math.max(0, Math.floor((createdAt + REFERENCE_IMAGE_TTL_MS - runtimeNow(runtime)) / 1000))
-    : Math.floor(REFERENCE_IMAGE_TTL_MS / 1000);
   return new Response(image.body, {
     headers: {
-      "cache-control": `public, max-age=${maxAge}, immutable`,
+      "cache-control": "private, no-store",
       "content-type": image.contentType || "image/png",
       "x-content-type-options": "nosniff",
     },
@@ -1307,6 +1548,31 @@ async function getDashscopeVideo(taskId, runtime) {
     seconds: result?.usage?.output_video_duration ?? result?.usage?.duration ?? null,
     size: result?.usage?.size || null,
     error: status === "FAILED" ? (output.message || result.message || "视频生成失败") : null,
+  });
+}
+
+async function getSiliconFlowVideo(taskId, runtime) {
+  const apiKey = runtimeEnv(runtime, "SILICONFLOW_API_KEY");
+  if (!apiKey) return json({ error: "SiliconFlow 视频服务尚未配置" }, 503);
+  const response = await fetchFor(runtime)(`${siliconflowBase(runtime)}/video/status`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId: taskId }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) return json({ error: upstreamMessage(result, "SiliconFlow 视频任务状态查询失败") }, response.status || 502);
+  const status = siliconFlowVideoStatus(result.status);
+  const videoUrl = result?.results?.videos?.[0]?.url || result.video_url || result.url || null;
+  return json({
+    taskId,
+    provider: "siliconflow",
+    status,
+    terminal: TERMINAL_STATUSES.has(status),
+    videoUrl,
+    progress: status === "SUCCEEDED" ? 100 : status === "RUNNING" ? 58 : 12,
+    seconds: null,
+    size: null,
+    error: status === "FAILED" ? upstreamMessage(result, "SiliconFlow 视频生成失败") : null,
   });
 }
 
@@ -1475,11 +1741,7 @@ async function enforceRateLimit(request, runtime, kind) {
   const config = RATE_LIMITS[kind];
   const configuredLimit = Number(runtimeEnv(runtime, config.envKey));
   const limit = Number.isInteger(configuredLimit) && configuredLimit > 0 ? configuredLimit : config.limit;
-  const clientId = runtime.clientId
-    || request.headers.get("cf-connecting-ip")
-    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || request.headers.get("user-agent")
-    || "anonymous";
+  const clientId = requestClientIdentifier(request, runtime);
   const key = `ratelimit/${kind}/${await rateLimitKey(clientId)}`;
   const now = runtimeNow(runtime);
   const current = await runtime.storage.getJSON(key);
@@ -1510,7 +1772,11 @@ function allowedDownloadUrl(value) {
         || hostname === "chatglm.cn"
         || hostname.endsWith(".chatglm.cn")
         || hostname === "zhipuai.cn"
-        || hostname.endsWith(".zhipuai.cn"));
+        || hostname.endsWith(".zhipuai.cn")
+        || hostname === "siliconflow.cn"
+        || hostname.endsWith(".siliconflow.cn")
+        || hostname === "siliconflow.com"
+        || hostname.endsWith(".siliconflow.com"));
   } catch {
     return false;
   }
@@ -1562,7 +1828,7 @@ export async function handleVideoApiRequest(request, runtime = {}) {
     if (url.pathname === "/api/models" && request.method === "GET") return await getModelAvailability(runtime);
 
     const referenceMatch = url.pathname.match(/^\/api\/reference-images\/(.+)$/);
-    if (referenceMatch && request.method === "GET") return await getReferenceImage(referenceMatch[1], runtime);
+    if (referenceMatch && request.method === "GET") return await getReferenceImage(referenceMatch[1], request, runtime);
 
     const protectedRoute = (kind, action) => async () => {
       const denied = authorizeRequest(request, runtime);
@@ -1580,6 +1846,12 @@ export async function handleVideoApiRequest(request, runtime = {}) {
     if (url.pathname === "/api/images" && request.method === "POST") {
       return protectedRoute("create", () => createImage(request, runtime))();
     }
+    if (url.pathname === "/api/agent/plan" && request.method === "POST") {
+      return protectedRoute("status", () => previewAgentPlan(request, runtime))();
+    }
+    if (url.pathname === "/api/agent/generate" && request.method === "POST") {
+      return protectedRoute("create", () => createAgentGeneration(request, runtime))();
+    }
     if (url.pathname === "/api/video-download" && request.method === "GET") {
       return protectedRoute("download", () => downloadVideo(request, runtime))();
     }
@@ -1594,6 +1866,7 @@ export async function handleVideoApiRequest(request, runtime = {}) {
         if (provider === "agnes") return getAgnesVideo(taskMatch[1], url.searchParams.get("video_id"), runtime);
         if (provider === "sub2api_grok") return getGrokVideo(taskMatch[1], runtime);
         if (provider === ZHIPU_API_PROVIDER) return getZhipuVideo(taskMatch[1], runtime);
+        if (provider === "siliconflow") return getSiliconFlowVideo(taskMatch[1], runtime);
         return getDashscopeVideo(taskMatch[1], runtime);
       })();
     }

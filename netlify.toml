@@ -6,4 +6,5 @@
   directory = "netlify/functions"
 
 [build.environment]
+  FREE_MODELS_ONLY = "true"
   VIDEO_ACCESS_DISABLED = "true"

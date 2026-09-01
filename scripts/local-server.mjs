@@ -50,6 +50,7 @@ function createMemoryStorage() {
         body: bytes,
         contentType: metadata.contentType || 'application/octet-stream',
         createdAt: Number(metadata.createdAt) || Date.now(),
+        accessToken: metadata.accessToken || '',
       });
     },
     async get(key) {
@@ -59,6 +60,7 @@ function createMemoryStorage() {
         body: value.body,
         contentType: value.contentType,
         createdAt: value.createdAt,
+        accessToken: value.accessToken,
       };
     },
     async cleanupExpired(prefix, cutoff) {
@@ -119,7 +121,7 @@ export async function createLocalServer({ root = process.cwd(), host = '127.0.0.
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.LOCAL_PORT) || 5173;
   const vite = await createLocalServer({ port });
-  const hasProvider = Boolean(process.env.DASHSCOPE_API_KEY || process.env.AGNES_API_KEY || process.env.ZHIPU_API_KEY || process.env.SUB2API_API_KEY);
+  const hasProvider = Boolean(process.env.DASHSCOPE_API_KEY || process.env.AGNES_API_KEY || process.env.ZHIPU_API_KEY || process.env.SUB2API_API_KEY || process.env.SILICONFLOW_API_KEY);
   console.log(`真实服务已启动：${vite.resolvedUrls?.local?.[0] || `http://127.0.0.1:${port}/`}`);
   console.log(hasProvider
     ? '已读取本地服务密钥；生成请求将直接发送给对应供应商。'

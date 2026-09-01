@@ -38,7 +38,7 @@ export function createTaskSnapshot(input = {}) {
     durationMode: input.durationMode || 'output',
     routeInput: input.routeInput || '',
     prompt: input.prompt || '',
-    isDemo: Boolean(input.isDemo),
+    projectId: input.projectId || '',
   };
 }
 

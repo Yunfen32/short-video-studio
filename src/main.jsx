@@ -2,17 +2,18 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AlertTriangle,
+  Archive,
   ArrowRight,
   Check,
   Clapperboard,
   Download,
   ExternalLink,
   Film,
+  Home,
   Image as ImageIcon,
   ImagePlus,
   Layers3,
   Loader2,
-  MonitorPlay,
   Play,
   RefreshCw,
   Sparkles,
@@ -54,13 +55,29 @@ import {
 } from './video-ui-state.mjs';
 import { isFreeVideoModel } from '../shared/free-models.mjs';
 import { getVideoExample } from '../shared/video-examples.mjs';
+import { isRecoverableStudioTask, readStudioTask, saveStudioTask } from './task-session.mjs';
 import './styles.css';
 import ImageStudio from './image-studio.jsx';
+import AgentStudio from './agent-studio.jsx';
+import AssetsStudio from './assets-studio.jsx';
+import HomeStudio from './home-studio.jsx';
+import {
+  addAssetsToCreativeLibrary,
+  assignCreativeAssetToProject,
+  createCreativeProject,
+  deleteCreativeAsset,
+  insertCreativeProject,
+  loadCreativeLibrary,
+  saveCreativeLibrary,
+  setCreativeAssetCurrentVersion,
+  setCreativeAssetRelations,
+  updateCreativeAsset,
+} from './creative-library.mjs';
 
 const STYLES = ['写实广告', '电影感', '产品展示', '动画短片'];
 const POLL_INTERVAL = Number(import.meta.env.VITE_POLL_INTERVAL) || 15000;
 const MAX_POLL_RETRIES = 3;
-const DEMO_VIDEO_URL = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
+const VIDEO_TASK_STORAGE_KEY = 'video';
 const GROUP_ICONS = {
   text: Type,
   image: ImageIcon,
@@ -105,6 +122,16 @@ function progressFor(status) {
   if (status === 'RUNNING') return 58;
   if (status === 'SUCCEEDED') return 100;
   return 0;
+}
+
+function restoredVideoTask() {
+  const stored = readStudioTask(window.localStorage, VIDEO_TASK_STORAGE_KEY);
+  if (!stored) return createInitialTaskState();
+  return {
+    ...createInitialTaskState(stored.token || 0),
+    ...stored,
+    actual: { ...createInitialTaskState().actual, ...(stored.actual || {}) },
+  };
 }
 
 function groupModelsByFamily(models) {
@@ -177,7 +204,7 @@ function audioFieldLabel(capability) {
   return '音频输入 URL（可选）';
 }
 
-function VideoStudio({ onOpenImage }) {
+function VideoStudio({ onOpenHome, onOpenImage, onOpenAgent, onOpenAssets, onSaveAssets, onContinueWithAgent, projects = [], assets = [] }) {
   const [workflowId, setWorkflowId] = useState('text-to-video');
   const [modelId, setModelId] = useState('wan2.7-t2v');
   const [prompt, setPrompt] = useState('');
@@ -195,22 +222,23 @@ function VideoStudio({ onOpenImage }) {
   const [videoInputUrl, setVideoInputUrl] = useState('');
   const [animationMode, setAnimationMode] = useState('wan-std');
   const [audioSetting, setAudioSetting] = useState('auto');
-  const [task, dispatchTask] = useReducer(reduceTaskState, undefined, createInitialTaskState);
+  const [task, dispatchTask] = useReducer(reduceTaskState, undefined, restoredVideoTask);
   const [error, setError] = useState('');
   const [mention, setMention] = useState(null);
   const [unavailableModels, setUnavailableModels] = useState([]);
+  const [modelCatalog, setModelCatalog] = useState(VIDEO_MODELS);
   const [freeOnly, setFreeOnly] = useState(false);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
-  const [demoMode, setDemoMode] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [loadedExampleId, setLoadedExampleId] = useState('');
+  const [assetProjectId, setAssetProjectId] = useState('');
+  const [savedAssetKeys, setSavedAssetKeys] = useState([]);
   const videoRef = useRef(null);
   const promptRef = useRef(null);
-  const activeTaskRef = useRef(0);
+  const activeTaskRef = useRef(task.token || 0);
   const activeUploadRef = useRef(0);
   const pollTimerRef = useRef(0);
-  const demoTimersRef = useRef([]);
-  const localImageUrlsRef = useRef(new Set());
+  const mountedRef = useRef(true);
 
   const taskStatus = task.status;
   const taskId = task.taskId;
@@ -221,8 +249,8 @@ function VideoStudio({ onOpenImage }) {
     [unavailableModels],
   );
   const availableModels = useMemo(
-    () => VIDEO_MODELS.filter((item) => (!freeOnly || isFreeVideoModel(item)) && !unavailableIds.has(item.id)),
-    [freeOnly, unavailableIds],
+    () => modelCatalog.filter((item) => (!freeOnly || isFreeVideoModel(item)) && !unavailableIds.has(item.id)),
+    [freeOnly, modelCatalog, unavailableIds],
   );
   const currentWorkflow = getVideoWorkflow(workflowId);
   const workflowGroupId = currentWorkflow?.groupId || 'text';
@@ -314,6 +342,7 @@ function VideoStudio({ onOpenImage }) {
     try {
       const data = await apiRequest('/api/models');
       setUnavailableModels(Array.isArray(data.unavailable) ? data.unavailable : []);
+      if (Array.isArray(data.videoModels)) setModelCatalog(data.videoModels);
       setFreeOnly(data.freeOnly === true);
       if (data.freeOnly === false) setError('当前服务未启用免费模型保护');
     } catch (availabilityError) {
@@ -327,26 +356,25 @@ function VideoStudio({ onOpenImage }) {
     refreshAvailability();
     const timer = window.setInterval(refreshAvailability, 5 * 60 * 1000);
     return () => {
+      mountedRef.current = false;
       window.clearInterval(timer);
       if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
-      demoTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
-      localImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem('video-demo-mode', String(demoMode));
-  }, [demoMode]);
+    saveStudioTask(window.localStorage, VIDEO_TASK_STORAGE_KEY, task);
+  }, [task]);
 
   const workflowModelIds = workflowModels.map((item) => item.id).join('|');
   useEffect(() => {
     if (!workflowModels.length || workflowModels.some((item) => item.id === modelId)) return;
-    const previous = VIDEO_MODELS.find((item) => item.id === modelId);
+    const previous = modelCatalog.find((item) => item.id === modelId);
     const fallback = workflowModels.find((item) => item.family === previous?.family)
       || workflowModels.find((item) => item.featured)
       || workflowModels[0];
     selectModel(fallback);
-  }, [workflowId, workflowModelIds, modelId]);
+  }, [workflowId, workflowModelIds, modelId, modelCatalog]);
 
   useEffect(() => {
     if (!selectedModel) return;
@@ -377,19 +405,7 @@ function VideoStudio({ onOpenImage }) {
     setUploadingCount(0);
   }
 
-  function clearDemoTimers() {
-    demoTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
-    demoTimersRef.current = [];
-  }
-
-  function releaseLocalImages(items = images) {
-    items.forEach((image) => {
-      if (localImageUrlsRef.current.delete(image.source)) URL.revokeObjectURL(image.source);
-    });
-  }
-
   function clearImages() {
-    releaseLocalImages();
     setImages([]);
   }
 
@@ -397,7 +413,6 @@ function VideoStudio({ onOpenImage }) {
     activeTaskRef.current += 1;
     if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
     pollTimerRef.current = 0;
-    clearDemoTimers();
     dispatchTask({ type: 'reset', token: activeTaskRef.current });
   }
 
@@ -431,7 +446,6 @@ function VideoStudio({ onOpenImage }) {
     if (images.length > nextCapability.imageMax) {
       const before = images;
       const after = normalizeImageRoles(images.slice(0, nextCapability.imageMax), workflowId);
-      releaseLocalImages(images.slice(nextCapability.imageMax));
       setPrompt((current) => remapImageMentions(current, workflowId, before, after));
       setImages(after);
       setError('该变体最多使用 ' + nextCapability.imageMax + ' 张图片，已保留前面的素材');
@@ -498,21 +512,6 @@ function VideoStudio({ onOpenImage }) {
       return;
     }
 
-    if (demoMode) {
-      const additions = selected.map((file, index) => {
-        const source = URL.createObjectURL(file);
-        localImageUrlsRef.current.add(source);
-        return {
-          id: Date.now().toString(36) + '-' + index + '-' + Math.random().toString(36).slice(2),
-          source,
-          role: defaultImageRole(workflowId, images.length + index, 'character'),
-        };
-      });
-      setImages((current) => normalizeImageRoles([...current, ...additions].slice(0, imageLimit), workflowId));
-      setError(files.length > available ? '当前生成方式最多使用 ' + imageLimit + ' 张图片' : '');
-      return;
-    }
-
     const uploadToken = activeUploadRef.current + 1;
     activeUploadRef.current = uploadToken;
     try {
@@ -538,7 +537,6 @@ function VideoStudio({ onOpenImage }) {
 
   function removeImage(index) {
     const before = images;
-    releaseLocalImages([images[index]]);
     const after = normalizeImageRoles(images.filter((_, itemIndex) => itemIndex !== index), workflowId);
     setPrompt((current) => remapImageMentions(current, workflowId, before, after));
     setImages(after);
@@ -550,15 +548,6 @@ function VideoStudio({ onOpenImage }) {
     const after = images.map((image, itemIndex) => itemIndex === index ? { ...image, role } : image);
     setPrompt((current) => remapImageMentions(current, workflowId, before, after));
     setImages(after);
-  }
-
-  function setDemoEnabled(nextDemoMode) {
-    if (!nextDemoMode) {
-      clearImages();
-      setPrompt((current) => stripImageMentions(current));
-    }
-    setError('');
-    setDemoMode(nextDemoMode);
   }
 
   function schedulePoll(callback, delay = POLL_INTERVAL) {
@@ -610,73 +599,14 @@ function VideoStudio({ onOpenImage }) {
     schedulePoll(() => pollTask(nextTaskId, taskToken, provider, videoId, 0));
   }
 
-  function generateDemoVideo() {
-    if (!canGenerate) {
-      setError(missingRequirement || '当前任务正在生成');
-      return;
-    }
-
-    setError('');
-    clearDemoTimers();
-    const taskToken = activeTaskRef.current + 1;
+  useEffect(() => {
+    if (!isRecoverableStudioTask(task)) return;
+    const taskToken = task.token || activeTaskRef.current + 1;
     activeTaskRef.current = taskToken;
-    const submittedPrompt = composeVideoPrompt(prompt, style);
-    const snapshot = createTaskSnapshot({
-      workflowId,
-      workflowLabel: currentWorkflow?.label,
-      modelId: selectedModel.id,
-      modelLabel: selectedModel.label,
-      familyLabel: selectedModel.familyLabel,
-      variantLabel: selectedModel.variantLabel,
-      provider: selectedModel.provider,
-      ratio: selectedCapability.ratioOptions.includes(ratio) ? ratio : '',
-      resolution,
-      duration,
-      durationMode: selectedCapability.durationMode,
-      routeInput,
-      prompt: submittedPrompt,
-      isDemo: true,
-    });
-    const taskId = 'demo-' + Date.now().toString(36);
-    dispatchTask({ type: 'start', token: taskToken, snapshot });
-
-    const scheduleDemoStep = (delay, action) => {
-      const timerId = window.setTimeout(() => {
-        demoTimersRef.current = demoTimersRef.current.filter((id) => id !== timerId);
-        if (activeTaskRef.current === taskToken) action();
-      }, delay);
-      demoTimersRef.current.push(timerId);
-    };
-
-    scheduleDemoStep(220, () => dispatchTask({
-      type: 'created',
-      token: taskToken,
-      taskId,
-      provider: 'demo',
-      status: 'PENDING',
-    }));
-    scheduleDemoStep(720, () => dispatchTask({
-      type: 'polled',
-      token: taskToken,
-      status: 'RUNNING',
-      progress: 62,
-    }));
-    scheduleDemoStep(1500, () => dispatchTask({
-      type: 'polled',
-      token: taskToken,
-      status: 'SUCCEEDED',
-      progress: 100,
-      videoUrl: DEMO_VIDEO_URL,
-      size: resolution,
-      seconds: selectedCapability.durationMode === 'source' ? 5 : duration,
-    }));
-  }
+    pollTask(task.taskId, taskToken, task.provider, task.videoId);
+  }, []);
 
   async function generateVideo() {
-    if (demoMode) {
-      generateDemoVideo();
-      return;
-    }
     if (!canGenerate) {
       setError(missingRequirement || '当前任务正在生成');
       return;
@@ -701,7 +631,15 @@ function VideoStudio({ onOpenImage }) {
       durationMode: selectedCapability.durationMode,
       routeInput,
       prompt: submittedPrompt,
+      projectId: assetProjectId,
     });
+    const startedTask = {
+      ...createInitialTaskState(taskToken),
+      status: 'PENDING',
+      progress: progressFor('PENDING'),
+      snapshot,
+    };
+    saveStudioTask(window.localStorage, VIDEO_TASK_STORAGE_KEY, startedTask);
     dispatchTask({ type: 'start', token: taskToken, snapshot });
 
     try {
@@ -726,7 +664,15 @@ function VideoStudio({ onOpenImage }) {
           audioSetting,
         }),
       });
-      if (activeTaskRef.current !== taskToken) return;
+      const createdTask = {
+        ...startedTask,
+        taskId: data.taskId || '',
+        provider: data.provider || '',
+        videoId: data.videoId || '',
+        status: data.status || 'PENDING',
+      };
+      saveStudioTask(window.localStorage, VIDEO_TASK_STORAGE_KEY, createdTask);
+      if (!mountedRef.current || activeTaskRef.current !== taskToken) return;
       dispatchTask({
         type: 'created',
         token: taskToken,
@@ -738,7 +684,14 @@ function VideoStudio({ onOpenImage }) {
       if (!data.taskId) throw new Error('视频服务没有返回任务编号，请稍后重试');
       pollTask(data.taskId, taskToken, data.provider, data.videoId);
     } catch (requestError) {
-      if (activeTaskRef.current !== taskToken) return;
+      const failedTask = {
+        ...startedTask,
+        status: 'FAILED',
+        progress: 0,
+        error: requestError.message,
+      };
+      saveStudioTask(window.localStorage, VIDEO_TASK_STORAGE_KEY, failedTask);
+      if (!mountedRef.current || activeTaskRef.current !== taskToken) return;
       dispatchTask({ type: 'failed', token: taskToken, error: requestError.message });
       if (requestError.modelUnavailable) {
         const unavailable = Array.isArray(requestError.unavailable) && requestError.unavailable.length
@@ -771,17 +724,6 @@ function VideoStudio({ onOpenImage }) {
 
   async function downloadVideo() {
     if (!videoUrl || downloading) return;
-    if (task.snapshot?.isDemo) {
-      const anchor = document.createElement('a');
-      anchor.href = videoUrl;
-      anchor.download = 'portfolio-demo-video.mp4';
-      anchor.target = '_blank';
-      anchor.rel = 'noreferrer';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      return;
-    }
     setDownloading(true);
     setError('');
     try {
@@ -808,6 +750,64 @@ function VideoStudio({ onOpenImage }) {
     }
   }
 
+  function saveVideoToAssets() {
+    if (!videoUrl || !onSaveAssets) return;
+    const key = `${task.taskId || 'direct'}:${videoUrl}`;
+    const alreadySaved = assets.some((asset) => asset.previewUrl === videoUrl && asset.source?.parameters?.taskId === (task.taskId || ''));
+    if (savedAssetKeys.includes(key) || alreadySaved) return;
+    const snapshot = task.snapshot || {};
+    onSaveAssets([{
+      projectId: snapshot.projectId || null,
+      type: 'video',
+      category: snapshot.workflowId === 'text-to-video' ? 'material' : 'shot',
+      title: `${snapshot.workflowLabel || '视频生成'} · ${snapshot.modelLabel || '视频'}`,
+      previewUrl: videoUrl,
+      tags: [snapshot.workflowLabel, snapshot.familyLabel, snapshot.variantLabel].filter(Boolean),
+      versionGroupId: snapshot.projectId
+        ? `project:${snapshot.projectId}:video:${snapshot.workflowId || 'video'}`
+        : `video:${snapshot.workflowId || 'video'}:${snapshot.prompt || ''}`,
+      source: {
+        provider: task.provider || snapshot.provider,
+        model: snapshot.modelId || snapshot.modelLabel,
+        workflow: snapshot.workflowId || '',
+        prompt: snapshot.prompt || '',
+        parameters: {
+          ratio: previewRatio,
+          resolution: previewResolution,
+          duration: previewDuration,
+          taskId: task.taskId || '',
+        },
+      },
+    }]);
+    setSavedAssetKeys((current) => [...current, key]);
+  }
+
+  function retryWithAnotherModel() {
+    if (workflowModels.length < 2) return;
+    const currentIndex = workflowModels.findIndex((model) => model.id === selectedModel?.id);
+    const next = workflowModels[(currentIndex + 1) % workflowModels.length];
+    selectModel(next);
+    setError('');
+  }
+
+  function continueFromVideo(nextWorkflowId) {
+    if (!videoUrl) return;
+    const sourcePrompt = task.snapshot?.prompt || prompt;
+    selectWorkflow(nextWorkflowId);
+    setVideoInputUrl(videoUrl);
+    setPrompt(sourcePrompt);
+    setError('');
+  }
+
+  function continueWithAgent() {
+    onContinueWithAgent?.({
+      kind: 'video',
+      prompt: task.snapshot?.prompt || prompt,
+      projectId: task.snapshot?.projectId || assetProjectId,
+      detail: videoUrl ? '已有视频结果，可继续拆解后续镜头、补充 BGM 或生成下一段。' : '视频任务未完成，需要改用兼容模型继续处理。',
+    });
+  }
+
   function togglePlayback() {
     const video = videoRef.current;
     if (!video) return;
@@ -832,7 +832,6 @@ function VideoStudio({ onOpenImage }) {
     ? outputDurationLabel(selectedCapability.durationMode, duration) + ' / ' + resolution
     : '--';
   const previewSnapshot = task.snapshot;
-  const isDemoTask = Boolean(previewSnapshot?.isDemo);
   const previewWorkflowLabel = previewSnapshot?.workflowLabel || currentWorkflow?.label || '--';
   const previewModelLabel = previewSnapshot?.modelLabel || selectedModel?.label || '暂无可用模型';
   const previewVariantLabel = previewSnapshot?.variantLabel || selectedModel?.variantLabel || '--';
@@ -858,23 +857,26 @@ function VideoStudio({ onOpenImage }) {
     <main className="app-shell video-app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <p>免费媒体模型</p>
-          <h1>视频生成工作台</h1>
+          <p>SHORT VIDEO STUDIO</p>
+          <h1>视频创作</h1>
         </div>
         <div className="topbar-controls">
           <div className="studio-switch" role="tablist" aria-label="创作类型">
+            <button type="button" onClick={onOpenHome} role="tab" aria-selected="false"><Home size={16} /><span>首页</span></button>
+            <button type="button" onClick={onOpenAgent} role="tab" aria-selected="false"><Wand2 size={16} /><span>Agent</span></button>
             <button type="button" className="active" role="tab" aria-selected="true"><Video size={16} /><span>视频</span></button>
             <button type="button" onClick={onOpenImage} role="tab" aria-selected="false"><ImageIcon size={16} /><span>图片</span></button>
+            <button type="button" onClick={onOpenAssets} role="tab" aria-selected="false"><Archive size={16} /><span>资产</span></button>
           </div>
           <button
             type="button"
-            className={'mode-toggle ' + (demoMode ? 'active' : '')}
-            onClick={() => setDemoEnabled(!demoMode)}
-            title={demoMode ? '切换至真实服务' : '切换至演示模式'}
-            disabled={isGenerating}
+            className="topbar-icon-action"
+            onClick={refreshAvailability}
+            disabled={availabilityLoading || isGenerating}
+            aria-label="刷新模型状态"
+            title="刷新模型状态"
           >
-            <MonitorPlay size={16} />
-            <span>{demoMode ? '演示模式' : '真实服务'}</span>
+            <RefreshCw className={availabilityLoading ? 'spin' : ''} size={16} />
           </button>
           <div className="service-metrics" aria-label="模型服务状态">
             <div><span>可用变体</span><strong>{availableModels.length}</strong></div>
@@ -886,14 +888,6 @@ function VideoStudio({ onOpenImage }) {
           </div>
         </div>
       </header>
-
-      {demoMode && (
-        <section className="demo-strip" aria-label="演示模式状态">
-          <MonitorPlay size={17} />
-          <span>演示任务不会调用模型服务或消耗额度</span>
-          <button type="button" onClick={() => setDemoEnabled(false)} disabled={isGenerating}>使用真实服务</button>
-        </section>
-      )}
 
       <nav className="workflow-groups" aria-label="创作入口">
         {VIDEO_WORKFLOW_GROUPS.map((group) => {
@@ -921,7 +915,7 @@ function VideoStudio({ onOpenImage }) {
           <section className="task-console" aria-labelledby="task-title">
             <div className="section-heading">
               <span>01</span>
-              <div><h2 id="task-title">选择生成方式</h2><p>{VIDEO_WORKFLOW_GROUPS.find((item) => item.id === workflowGroupId)?.label}</p></div>
+              <div><h2 id="task-title">生成方式</h2><p>{VIDEO_WORKFLOW_GROUPS.find((item) => item.id === workflowGroupId)?.label}</p></div>
             </div>
             <div className="task-tabs" role="tablist" aria-label="具体生成方式">
               {groupWorkflows.map((workflow) => {
@@ -950,7 +944,7 @@ function VideoStudio({ onOpenImage }) {
           <section className="model-console" aria-labelledby="model-title">
             <div className="section-heading">
               <span>02</span>
-              <div><h2 id="model-title">选择模型</h2><p>{currentWorkflow?.label}</p></div>
+              <div><h2 id="model-title">兼容模型</h2><p>{currentWorkflow?.label}</p></div>
             </div>
             <div className="model-family-list" role="listbox" aria-label="兼容模型系列">
               {modelFamilies.map((family) => {
@@ -968,7 +962,7 @@ function VideoStudio({ onOpenImage }) {
                       role="option"
                       aria-selected={isActive}
                     >
-                        <span className="provider-name">{family.providerLabel} · 免费</span>
+                        <span className="provider-name">{family.providerLabel} · {freeOnly ? '免费' : 'API'}</span>
                       <strong>{family.familyLabel}</strong>
                       <p>适用：{currentWorkflow?.label}</p>
                       <small className="model-feature-note">{displayModel.summary}</small>
@@ -1026,7 +1020,7 @@ function VideoStudio({ onOpenImage }) {
           <section className="input-console" aria-labelledby="input-title">
             <div className="section-heading">
               <span>03</span>
-              <div><h2 id="input-title">输入素材</h2><p>{currentWorkflow?.summary}</p></div>
+              <div><h2 id="input-title">描述与素材</h2><p>{currentWorkflow?.summary}</p></div>
             </div>
 
             {canUseVideo && (
@@ -1190,6 +1184,13 @@ function VideoStudio({ onOpenImage }) {
                   {STYLES.map((item) => <option key={item}>{item}</option>)}
                 </select>
               </label>
+              <label className="field">
+                <span>归属项目</span>
+                <select value={assetProjectId} onChange={(event) => setAssetProjectId(event.target.value)}>
+                  <option value="">未归档</option>
+                  {projects.map((project) => <option value={project.id} key={project.id}>{project.title}</option>)}
+                </select>
+              </label>
               {selectedCapability.supportsAudioSetting && (
                 <label className="field">
                   <span>声音处理</span>
@@ -1234,12 +1235,13 @@ function VideoStudio({ onOpenImage }) {
           </section>
 
           {errorMessage && <p className="error-message" role="alert"><AlertTriangle size={15} />{errorMessage}</p>}
+          {taskStatus === 'FAILED' && <div className="task-recovery" aria-label="失败恢复操作"><span>任务未完成</span><button type="button" className="secondary-action" onClick={generateVideo} disabled={!canGenerate}>重新提交</button><button type="button" className="secondary-action" onClick={retryWithAnotherModel} disabled={workflowModels.length < 2}>换兼容模型</button><button type="button" className="secondary-action" onClick={continueWithAgent}>让 Agent 处理</button></div>}
 
           <div className="action-row">
             <div className="primary-action-wrap">
               <button className="primary-action" onClick={generateVideo} disabled={!canGenerate} data-testid="generate-video" title={missingRequirement || '提交视频生成任务'} aria-describedby="generation-requirement">
                 {isGenerating ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
-                {isGenerating ? '正在生成' : (demoMode ? '演示生成' : '生成视频')}
+                {isGenerating ? '正在生成' : '生成视频'}
               </button>
               <p id="generation-requirement" className={missingRequirement ? 'action-note warning' : 'action-note ready'} aria-live="polite">
                 {isGenerating ? '任务已提交，可在右侧查看状态' : (missingRequirement || '输入完整，可以生成')}
@@ -1254,7 +1256,7 @@ function VideoStudio({ onOpenImage }) {
             <div className="panel-heading"><Film size={18} /><div><h2>生成结果</h2><span>{previewWorkflowLabel}</span></div></div>
             <div className={'preview-model-state ' + previewStatusTone} data-testid="preview-model" aria-live="polite">
               {isGenerating ? <Loader2 className="spin" size={14} /> : taskStatus === 'FAILED' ? <AlertTriangle size={14} /> : <Check size={14} />}
-              <span>{isDemoTask ? '演示 · ' : ''}{previewModelLabel} · {statusLabels[taskStatus] || taskStatus}</span>
+              <span>{previewModelLabel} · {statusLabels[taskStatus] || taskStatus}</span>
             </div>
             <div className="toolbar-actions">
               <button className="icon-action" onClick={togglePlayback} disabled={!videoUrl} aria-label="播放或暂停" title="播放或暂停"><Play size={18} /></button>
@@ -1262,6 +1264,7 @@ function VideoStudio({ onOpenImage }) {
               <button className="icon-action" onClick={downloadVideo} disabled={!videoUrl || downloading} aria-label="下载视频" title="下载视频">
                 {downloading ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
               </button>
+              <button className="icon-action" onClick={saveVideoToAssets} disabled={!videoUrl || savedAssetKeys.includes(`${taskId || 'direct'}:${videoUrl}`) || assets.some((asset) => asset.previewUrl === videoUrl && asset.source?.parameters?.taskId === (taskId || ''))} aria-label="保存到资产" title="保存到资产"><Archive size={18} /></button>
             </div>
           </div>
 
@@ -1292,6 +1295,7 @@ function VideoStudio({ onOpenImage }) {
             <div><span>任务编号</span><strong>{taskId || '--'}</strong></div>
             <div data-testid="task-status"><span>结果状态</span><strong>{statusLabels[taskStatus] || taskStatus}</strong></div>
           </div>
+          {taskStatus === 'SUCCEEDED' && videoUrl && <div className="result-continuation" aria-label="继续创作"><span>继续创作</span><button type="button" className="secondary-action" onClick={generateVideo} disabled={!canGenerate}>重新生成</button><button type="button" className="secondary-action" onClick={() => continueFromVideo('video-edit')}>修改这个镜头</button><button type="button" className="secondary-action" onClick={() => continueFromVideo('video-continuation')}>延长视频</button><button type="button" className="secondary-action" onClick={continueWithAgent}>让 Agent 继续</button></div>}
         </section>
       </section>
     </main>
@@ -1299,9 +1303,80 @@ function VideoStudio({ onOpenImage }) {
 }
 
 function App() {
-  const [studio, setStudio] = useState('video');
-  if (studio === 'image') return <ImageStudio onOpenVideo={() => setStudio('video')} />;
-  return <VideoStudio onOpenImage={() => setStudio('image')} />;
+  const [studio, setStudio] = useState('home');
+  const [library, setLibrary] = useState(() => loadCreativeLibrary(window.localStorage));
+  const [agentLaunch, setAgentLaunch] = useState(null);
+
+  useEffect(() => {
+    saveCreativeLibrary(window.localStorage, library);
+  }, [library]);
+
+  function createProject(input) {
+    const created = createCreativeProject(input);
+    setLibrary((current) => insertCreativeProject(current, created));
+    return created.project;
+  }
+
+  function saveAssets(drafts) {
+    setLibrary((current) => addAssetsToCreativeLibrary(current, drafts).library);
+  }
+
+  function openAgent(draft) {
+    if (draft?.prompt) setAgentLaunch({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...draft });
+    setStudio('agent');
+  }
+
+  if (studio === 'assets') return <AssetsStudio
+    library={library}
+    onOpenHome={() => setStudio('home')}
+    onOpenVideo={() => setStudio('video')}
+    onOpenImage={() => setStudio('image')}
+    onOpenAgent={() => setStudio('agent')}
+    onUpdateAsset={(assetId, patch) => setLibrary((current) => updateCreativeAsset(current, assetId, patch))}
+    onDeleteAsset={(assetId) => setLibrary((current) => deleteCreativeAsset(current, assetId))}
+    onSetRelations={(assetId, relationIds) => setLibrary((current) => setCreativeAssetRelations(current, assetId, relationIds))}
+    onAssignProject={(assetId, projectId) => setLibrary((current) => assignCreativeAssetToProject(current, assetId, projectId))}
+    onSetCurrentVersion={(assetId) => setLibrary((current) => setCreativeAssetCurrentVersion(current, assetId))}
+  />;
+  if (studio === 'agent') return <AgentStudio
+    projects={library.projects}
+    assets={library.assets}
+    onCreateProject={createProject}
+    onSaveAssets={saveAssets}
+    launchDraft={agentLaunch}
+    onOpenHome={() => setStudio('home')}
+    onOpenVideo={() => setStudio('video')}
+    onOpenImage={() => setStudio('image')}
+    onOpenAssets={() => setStudio('assets')}
+  />;
+  if (studio === 'image') return <ImageStudio
+    projects={library.projects}
+    assets={library.assets}
+    onSaveAssets={saveAssets}
+    onContinueWithAgent={openAgent}
+    onOpenHome={() => setStudio('home')}
+    onOpenVideo={() => setStudio('video')}
+    onOpenAgent={openAgent}
+    onOpenAssets={() => setStudio('assets')}
+  />;
+  if (studio === 'home') return <HomeStudio
+    projects={library.projects}
+    assets={library.assets}
+    onOpenAgent={openAgent}
+    onOpenVideo={() => setStudio('video')}
+    onOpenImage={() => setStudio('image')}
+    onOpenAssets={() => setStudio('assets')}
+  />;
+  return <VideoStudio
+    projects={library.projects}
+    assets={library.assets}
+    onSaveAssets={saveAssets}
+    onContinueWithAgent={openAgent}
+    onOpenHome={() => setStudio('home')}
+    onOpenImage={() => setStudio('image')}
+    onOpenAgent={openAgent}
+    onOpenAssets={() => setStudio('assets')}
+  />;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
