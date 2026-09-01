@@ -38,7 +38,7 @@ export function createTaskSnapshot(input = {}) {
     durationMode: input.durationMode || 'output',
     routeInput: input.routeInput || '',
     prompt: input.prompt || '',
-    isDemo: Boolean(input.isDemo),
+    projectId: input.projectId || '',
   };
 }
 
@@ -117,3 +117,4 @@ export function outputDurationLabel(durationMode, duration) {
   if (durationMode === 'truncate') return duration > 0 ? `截取前 ${duration} 秒` : '保留原时长';
   return `${duration} 秒`;
 }
+

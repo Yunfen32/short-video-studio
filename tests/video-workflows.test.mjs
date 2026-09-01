@@ -86,8 +86,8 @@ test('免费模型保护只暴露并允许免费视频模型', async () => {
   const modelsResponse = await handleVideoApiRequest(new Request('https://studio.example/api/models'), runtime);
   const availability = await modelsResponse.json();
   assert.equal(availability.freeOnly, true);
-  assert.equal(availability.availableCount, 2);
-  assert.equal(availability.imageAvailableCount, 3);
+  assert.equal(availability.availableCount, 1);
+  assert.equal(availability.imageAvailableCount, 1);
 
   const paidAttempt = await handleVideoApiRequest(new Request('https://studio.example/api/videos', {
     method: 'POST',
@@ -95,6 +95,42 @@ test('免费模型保护只暴露并允许免费视频模型', async () => {
   }), runtime);
   assert.equal(paidAttempt.status, 403);
   assert.equal((await paidAttempt.json()).paidModelBlocked, true);
+});
+
+test('模型目录只返回服务端已配置的供应商模型', async () => {
+  const runtime = memoryRuntime({ VIDEO_ACCESS_DISABLED: 'true', FREE_MODELS_ONLY: 'false', ZHIPU_API_KEY: 'zhipu-key' });
+  const response = await handleVideoApiRequest(new Request('https://studio.example/api/models'), runtime);
+  const availability = await response.json();
+
+  assert.ok(availability.videoModels.length > 0);
+  assert.ok(availability.imageModels.length > 0);
+  assert.ok(availability.videoModels.every((model) => model.provider === 'zhipu'));
+  assert.ok(availability.imageModels.every((model) => model.provider === 'zhipu'));
+});
+
+test('Grok 视频模型需要显式启用经过验证的视频协议', async () => {
+  const disabledRuntime = memoryRuntime({
+    VIDEO_ACCESS_DISABLED: 'true',
+    FREE_MODELS_ONLY: 'false',
+    SUB2API_API_KEY: 'sub2api-key',
+  });
+  const disabledCatalog = await handleVideoApiRequest(new Request('https://studio.example/api/models'), disabledRuntime);
+  assert.equal((await disabledCatalog.json()).videoModels.some((model) => model.provider === 'sub2api_grok'), false);
+  const disabledCreate = await handleVideoApiRequest(new Request('https://studio.example/api/videos', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'grok-imagine-video', workflow: 'text-to-video', prompt: '不应调用未验证协议' }),
+  }), disabledRuntime);
+  assert.equal(disabledCreate.status, 503);
+
+  const enabledRuntime = memoryRuntime({
+    VIDEO_ACCESS_DISABLED: 'true',
+    FREE_MODELS_ONLY: 'false',
+    SUB2API_API_KEY: 'sub2api-key',
+    SUB2API_GROK_VIDEO_ENABLED: 'true',
+  });
+  const enabledCatalog = await handleVideoApiRequest(new Request('https://studio.example/api/models'), enabledRuntime);
+  assert.equal((await enabledCatalog.json()).videoModels.some((model) => model.provider === 'sub2api_grok'), true);
 });
 
 test('Agnes 免费图片模型使用服务端密钥并支持参考图', async () => {
@@ -234,6 +270,7 @@ test('Sub2API Grok 使用视频任务协议创建并轮询 Grok Imagine Video', 
   const runtime = memoryRuntime({
     VIDEO_ACCESS_TOKEN: 'studio-secret',
     SUB2API_API_KEY: 'sub2api-server-key',
+    SUB2API_GROK_VIDEO_ENABLED: 'true',
   });
   const calls = [];
   runtime.fetch = async (url, options = {}) => {
@@ -336,6 +373,9 @@ test('托管入口未配置访问变量时自动进入公开演示模式', async
     const availability = await models.json();
     assert.equal(models.status, 200, platform);
     assert.equal(availability.accessRequired, false, platform);
+    assert.equal(availability.freeOnly, true, platform);
+    assert.equal(availability.videoModels.some((model) => model.id === 'wan2.7-t2v'), false, platform);
+    assert.equal(availability.imageModels.some((model) => model.id === 'wan2.7-image-pro'), false, platform);
 
     const upload = await handleVideoApiRequest(new Request('https://studio.example/api/reference-images', {
       method: 'POST',
@@ -346,7 +386,13 @@ test('托管入口未配置访问变量时自动进入公开演示模式', async
   }
 });
 
-test('上传、生成和下载分别限流，参考图只允许受控写入', async () => {
+test('Netlify 入口会把 Agent 计划和生成请求交给共享后端', async () => {
+  const netlify = await import('../netlify/functions/videos.mjs');
+  assert.ok(netlify.config.path.includes('/api/agent/plan'));
+  assert.ok(netlify.config.path.includes('/api/agent/generate'));
+});
+
+test('上传、生成和下载分别限流，参考图使用私有持有者链接', async () => {
   const runtime = memoryRuntime({
     VIDEO_ACCESS_TOKEN: 'studio-secret',
     VIDEO_UPLOAD_LIMIT_PER_HOUR: '1',
@@ -360,9 +406,15 @@ test('上传、生成和下载分别限流，参考图只允许受控写入', as
   assert.equal(upload.status, 201);
   const uploadedUrl = (await upload.json()).url;
 
-  const publicRead = await handleVideoApiRequest(new Request(uploadedUrl), runtime);
-  assert.equal(publicRead.status, 200);
-  assert.equal(publicRead.headers.get('content-type'), 'image/png');
+  const privateRead = await handleVideoApiRequest(new Request(uploadedUrl), runtime);
+  assert.equal(privateRead.status, 200);
+  assert.equal(privateRead.headers.get('content-type'), 'image/png');
+  assert.equal(privateRead.headers.get('cache-control'), 'private, no-store');
+
+  const pathOnly = new URL(uploadedUrl);
+  pathOnly.search = '';
+  const unauthorizedRead = await handleVideoApiRequest(new Request(pathOnly), runtime);
+  assert.equal(unauthorizedRead.status, 404);
 
   const limited = await handleVideoApiRequest(new Request('https://studio.example/api/reference-images', {
     method: 'POST',
@@ -900,3 +952,4 @@ test('账户欠费暂停整个服务商，单模型额度耗尽只暂停当前�
   assert.deepEqual(quotaFailure.unavailable.map((item) => item.modelId), ['wan2.7-t2v']);
   assert.equal(quotaFailure.unavailable[0].scope, 'model');
 });
+

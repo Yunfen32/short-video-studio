@@ -21,7 +21,6 @@ test('任务状态按提交令牌推进并忽略过期轮询', () => {
     resolution: '720P',
     duration: 5,
     durationMode: 'output',
-    isDemo: true,
   });
   let state = reduceTaskState(createInitialTaskState(), { type: 'start', token: 3, snapshot });
   assert.equal(state.status, 'PENDING');
@@ -46,7 +45,6 @@ test('任务状态按提交令牌推进并忽略过期轮询', () => {
   assert.equal(state.status, 'SUCCEEDED');
   assert.equal(state.snapshot.modelId, 'agnes-video-v2.0');
   assert.equal(state.actual.size, '1280x720');
-  assert.equal(state.snapshot.isDemo, true);
 });
 
 test('重置使旧任务失效，但提交快照不会随当前选择变化', () => {
@@ -90,3 +88,4 @@ test('服务商停用列表按模型合并，输出时长文案保持真实语�
   assert.equal(outputDurationLabel('truncate', 4), '截取前 4 秒');
   assert.equal(outputDurationLabel('source', 5), '跟随源视频');
 });
+

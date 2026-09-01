@@ -6,10 +6,19 @@ export const FREE_IMAGE_MODEL_IDS = Object.freeze([
   "agnes-image-2.1-flash",
 ]);
 
+// 仅收录已在供应商官方价格页明确标注为免费的动态模型。
+export const FREE_SILICONFLOW_IMAGE_MODEL_IDS = Object.freeze([
+  "Kwai-Kolors/Kolors",
+]);
+
 export function isFreeVideoModel(model) {
-  return Boolean(model?.id && FREE_VIDEO_MODEL_IDS.includes(model.id));
+  return Boolean(model?.isFree === true || (model?.id && FREE_VIDEO_MODEL_IDS.includes(model.id)));
 }
 
 export function isFreeImageModel(model) {
-  return Boolean(model?.id && FREE_IMAGE_MODEL_IDS.includes(model.id));
+  return Boolean(
+    model?.isFree === true
+    || (model?.id && (FREE_IMAGE_MODEL_IDS.includes(model.id) || FREE_SILICONFLOW_IMAGE_MODEL_IDS.includes(model.id))),
+  );
 }
+

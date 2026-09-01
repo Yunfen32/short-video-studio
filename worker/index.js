@@ -31,7 +31,10 @@ function createStorage(bucket) {
     put(key, body, metadata = {}) {
       return bucket.put(key, body, {
         httpMetadata: { contentType: metadata.contentType || "application/octet-stream" },
-        customMetadata: { createdAt: String(Number(metadata.createdAt) || Date.now()) },
+        customMetadata: {
+          createdAt: String(Number(metadata.createdAt) || Date.now()),
+          accessToken: metadata.accessToken || "",
+        },
       });
     },
     async get(key) {
@@ -41,6 +44,7 @@ function createStorage(bucket) {
         body: object.body,
         contentType: object.httpMetadata?.contentType,
         createdAt: Number(object.customMetadata?.createdAt) || 0,
+        accessToken: object.customMetadata?.accessToken || "",
       };
     },
     async cleanupExpired(prefix, cutoff) {
@@ -77,3 +81,4 @@ export default {
     return response.status === 404 ? (fallback || response) : response;
   },
 };
+

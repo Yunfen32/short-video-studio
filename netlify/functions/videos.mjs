@@ -18,6 +18,7 @@ function createStorage() {
         metadata: {
           contentType: metadata.contentType || "application/octet-stream",
           createdAt: Number(metadata.createdAt) || Date.now(),
+          accessToken: metadata.accessToken || "",
         },
       });
     },
@@ -28,6 +29,7 @@ function createStorage() {
         body: result.data,
         contentType: result.metadata?.contentType,
         createdAt: Number(result.metadata?.createdAt) || 0,
+        accessToken: result.metadata?.accessToken || "",
       };
     },
     async cleanupExpired(prefix, cutoff) {
@@ -60,6 +62,8 @@ export const config = {
     "/api/videos/:taskId",
     "/api/images",
     "/api/images/:taskId",
+    "/api/agent/plan",
+    "/api/agent/generate",
     "/api/reference-images",
     "/api/reference-images/:key",
     "/api/reference-images/*",
@@ -67,3 +71,4 @@ export const config = {
     "/api/image-download",
   ],
 };
+
