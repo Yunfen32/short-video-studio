@@ -226,6 +226,27 @@ test('未显式指定规划服务时，认证失败会回退到下一家 LLM', a
   assert.equal((await response.json()).planner.provider, 'zhipu');
 });
 
+test('显式 Agent LLM 限流时会使用备用服务的默认模型继续规划', async () => {
+  const runtime = memoryRuntime({
+    VIDEO_ACCESS_DISABLED: 'true', FREE_MODELS_ONLY: 'false',
+    AGENT_LLM_API_KEY: 'limited-key', AGENT_LLM_BASE_URL: 'https://agnes-llm.example/v1', AGENT_LLM_MODEL: 'agnes-2.5-flash', AGENT_LLM_WIRE_API: 'chat_completions',
+    DASHSCOPE_API_KEY: 'fallback-key',
+  });
+  const calls = [];
+  runtime.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body) });
+    if (String(url).includes('agnes-llm.example')) return Response.json({ error: { message: 'rate limited' } }, { status: 429 });
+    return llmResponse();
+  };
+  const response = await handleVideoApiRequest(new Request('https://studio.example/api/agent/project-plan', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ target: 'video', duration: 5, prompt: '纸飞机短片' }),
+  }), runtime);
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls.map((call) => call.url), ['https://agnes-llm.example/v1/chat/completions', 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions']);
+  assert.equal(calls[1].body.model, 'qwen-plus');
+  assert.equal((await response.json()).planner.provider, 'dashscope');
+});
+
 test('创作 Agent 可先制定服务端计划，且不会创建供应商任务', async () => {
   const runtime = memoryRuntime({
     VIDEO_ACCESS_DISABLED: 'true',

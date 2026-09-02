@@ -743,26 +743,31 @@ class AgentLlmConfigurationError extends Error {
 
 function agentLlmCandidates(runtime) {
   const explicitKey = runtimeEnv(runtime, "AGENT_LLM_API_KEY");
+  const configuredModel = runtimeEnv(runtime, "AGENT_LLM_MODEL");
+  const configuredReasoningEffort = runtimeEnv(runtime, "AGENT_LLM_REASONING_EFFORT");
+  const candidates = [];
   if (explicitKey) {
-    return [{
+    candidates.push({
       provider: runtimeEnv(runtime, "AGENT_LLM_PROVIDER") || "openai-compatible",
       apiKey: explicitKey,
       baseUrl: (runtimeEnv(runtime, "AGENT_LLM_BASE_URL") || "https://api.openai.com/v1").replace(/\/$/, ""),
-      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "gpt-4o-mini",
+      model: configuredModel || "gpt-4o-mini",
       wireApi: runtimeEnv(runtime, "AGENT_LLM_WIRE_API") || "responses",
-      reasoningEffort: runtimeEnv(runtime, "AGENT_LLM_REASONING_EFFORT") || "medium",
-    }];
+      reasoningEffort: configuredReasoningEffort || "medium",
+    });
   }
-  const candidates = [];
+  // 显式 LLM 遇到限流或认证故障时，继续尝试已配置的兼容服务。
+  // 备用服务不能沿用显式模型名，否则跨服务商模型 ID 会失效。
+  const fallbackModel = explicitKey ? "" : configuredModel;
   const sub2apiKey = runtimeEnv(runtime, SUB2API_GROK.envKey);
   if (sub2apiKey) {
     candidates.push({
       provider: SUB2API_GROK.provider,
       apiKey: sub2apiKey,
       baseUrl: sub2apiGrokBase(runtime),
-      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || SUB2API_GROK.reviewModel,
+      model: fallbackModel || SUB2API_GROK.reviewModel,
       wireApi: "responses",
-      reasoningEffort: runtimeEnv(runtime, "AGENT_LLM_REASONING_EFFORT") || SUB2API_GROK.reasoningEffort,
+      reasoningEffort: configuredReasoningEffort || SUB2API_GROK.reasoningEffort,
     });
   }
   const zhipuKey = runtimeEnv(runtime, "ZHIPU_API_KEY");
@@ -771,7 +776,7 @@ function agentLlmCandidates(runtime) {
       provider: ZHIPU_API_PROVIDER,
       apiKey: zhipuKey,
       baseUrl: zhipuBase(runtime),
-      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "glm-4.5-air",
+      model: fallbackModel || "glm-4.5-air",
       wireApi: "chat_completions",
     });
   }
@@ -781,7 +786,7 @@ function agentLlmCandidates(runtime) {
       provider: "dots",
       apiKey: dotsKey,
       baseUrl: dotsBase(runtime),
-      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "dots3-note-prev",
+      model: fallbackModel || "dots3-note-prev",
       wireApi: "chat_completions",
     });
   }
@@ -791,7 +796,7 @@ function agentLlmCandidates(runtime) {
       provider: "dashscope",
       apiKey: dashscopeKey,
       baseUrl: `${dashscopeBase(runtime)}/compatible-mode/v1`,
-      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "qwen-plus",
+      model: fallbackModel || "qwen-plus",
       wireApi: "chat_completions",
     });
   }
