@@ -1378,6 +1378,442 @@ select {
   line-height: 1.5;
 }
 
+/* --------------------------------------------------------------------------
+ * 创作工作台：左侧导航 + 中央画布
+ * -------------------------------------------------------------------------- */
+
+@media (min-width: 1181px) {
+  .video-app-shell,
+  .image-app-shell,
+  .agent-app-shell {
+    --studio-rail-width: 248px;
+    display: grid;
+    grid-template-columns: var(--studio-rail-width) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: 100vh;
+    overflow: hidden;
+    background: #ffffff;
+  }
+
+  .image-app-shell .topbar,
+  .agent-app-shell .topbar,
+  .video-app-shell .topbar {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 0;
+    height: 100vh;
+    padding: 30px 18px 18px;
+    border: 0;
+    border-right: 1px solid #e8e8ec;
+    background: #f7f7f8;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 28px;
+  }
+
+  .image-app-shell .brand-block,
+  .agent-app-shell .brand-block,
+  .video-app-shell .brand-block {
+    padding: 0 10px;
+  }
+
+  .image-app-shell .brand-block p,
+  .agent-app-shell .brand-block p,
+  .video-app-shell .brand-block p {
+    margin-bottom: 8px;
+    color: #4d68d9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  .image-app-shell .brand-block h1,
+  .agent-app-shell .brand-block h1,
+  .video-app-shell .brand-block h1 {
+    color: #1f2025;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 22px;
+    font-weight: 750;
+    letter-spacing: -0.04em;
+  }
+
+  .image-app-shell .topbar-controls,
+  .agent-app-shell .topbar-controls,
+  .video-app-shell .topbar-controls {
+    min-height: 0;
+    flex: 1 1 auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 12px;
+  }
+
+  .image-app-shell .studio-switch,
+  .agent-app-shell .studio-switch,
+  .video-app-shell .studio-switch {
+    min-height: 0;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    display: grid;
+    gap: 4px;
+  }
+
+  .image-app-shell .studio-switch button,
+  .agent-app-shell .studio-switch button,
+  .video-app-shell .studio-switch button {
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #70717a;
+    justify-content: flex-start;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .image-app-shell .studio-switch button:hover,
+  .agent-app-shell .studio-switch button:hover,
+  .video-app-shell .studio-switch button:hover {
+    color: #1f2025;
+    background: #ececf0;
+  }
+
+  .image-app-shell .studio-switch button.active,
+  .agent-app-shell .studio-switch button.active,
+  .video-app-shell .studio-switch button.active {
+    color: #1f2025;
+    background: #e7e8ec;
+    box-shadow: inset 3px 0 0 #4d68d9;
+  }
+
+  .image-app-shell .studio-switch button svg,
+  .agent-app-shell .studio-switch button svg,
+  .video-app-shell .studio-switch button svg {
+    color: #4d68d9;
+  }
+
+  .image-app-shell .topbar-icon-action,
+  .agent-app-shell .topbar-icon-action,
+  .video-app-shell .topbar-icon-action {
+    order: 2;
+    width: 100%;
+    height: 40px;
+    border: 1px solid #e0e1e7;
+    border-radius: 11px;
+    background: #ffffff;
+    color: #60616a;
+  }
+
+  .image-app-shell .service-metrics,
+  .agent-app-shell .service-metrics,
+  .video-app-shell .service-metrics {
+    order: 3;
+    margin-top: auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 0;
+    border-top: 1px solid #e5e5ea;
+    background: transparent;
+  }
+
+  .image-app-shell .service-metrics > div,
+  .agent-app-shell .service-metrics > div,
+  .video-app-shell .service-metrics > div {
+    min-height: 52px;
+    padding: 9px 4px;
+    border: 0;
+    border-right: 1px solid #e5e5ea;
+  }
+
+  .image-app-shell .service-metrics > div:last-child,
+  .agent-app-shell .service-metrics > div:last-child,
+  .video-app-shell .service-metrics > div:last-child {
+    border-right: 0;
+  }
+
+  .image-app-shell .service-metrics span,
+  .agent-app-shell .service-metrics span,
+  .video-app-shell .service-metrics span {
+    color: #85868e;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 9px;
+  }
+
+  .image-app-shell .service-metrics strong,
+  .agent-app-shell .service-metrics strong,
+  .video-app-shell .service-metrics strong {
+    color: #25262b;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+  }
+
+  .image-app-shell .workspace,
+  .agent-app-shell .workspace {
+    grid-column: 2;
+    grid-row: 1;
+    height: 100vh;
+    grid-template-columns: minmax(470px, 0.9fr) minmax(500px, 1.1fr);
+    background: #ffffff;
+  }
+
+  .video-app-shell {
+    grid-template-rows: 76px minmax(0, 1fr);
+  }
+
+  .video-app-shell .topbar {
+    grid-row: 1 / -1;
+  }
+
+  .video-app-shell .workflow-groups {
+    grid-column: 2;
+    grid-row: 1;
+    height: 76px;
+    padding: 14px 28px;
+    border: 0;
+    border-bottom: 1px solid #e8e8ec;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .video-app-shell .workflow-groups button {
+    width: auto;
+    height: 40px;
+    min-height: 40px;
+    padding: 0 13px;
+    border: 1px solid #e5e5ea;
+    border-radius: 10px;
+    background: #ffffff;
+    grid-template-columns: auto 1fr;
+    gap: 7px;
+    color: #696a72;
+  }
+
+  .video-app-shell .workflow-groups button strong {
+    display: none;
+  }
+
+  .video-app-shell .workflow-groups button:hover:not(:disabled) {
+    border-color: #bfc8f3;
+    background: #f4f6ff;
+  }
+
+  .video-app-shell .workflow-groups button.active {
+    border-color: #4d68d9;
+    background: #eef1ff;
+    color: #334ab0;
+  }
+
+  .video-app-shell .workflow-groups button span {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 12px;
+  }
+
+  .video-app-shell .workspace {
+    grid-column: 2;
+    grid-row: 2;
+    height: calc(100vh - 76px);
+    grid-template-columns: minmax(500px, 0.95fr) minmax(500px, 1.05fr);
+    background: #ffffff;
+  }
+
+  .video-app-shell .control-panel,
+  .image-app-shell .control-panel,
+  .agent-app-shell .control-panel {
+    border-right: 1px solid #e8e8ec;
+    background: #ffffff;
+    scrollbar-color: #d8d9df #ffffff;
+  }
+
+  .video-app-shell .task-console,
+  .video-app-shell .model-console,
+  .video-app-shell .input-console,
+  .video-app-shell .settings-console,
+  .image-app-shell .task-console,
+  .image-app-shell .model-console,
+  .image-app-shell .input-console,
+  .image-app-shell .settings-console,
+  .agent-app-shell .task-console,
+  .agent-app-shell .model-console,
+  .agent-app-shell .input-console,
+  .agent-app-shell .settings-console {
+    padding: 28px 34px;
+    border-color: #ededf0;
+  }
+
+  .video-app-shell .section-heading,
+  .image-app-shell .section-heading,
+  .agent-app-shell .section-heading {
+    margin-bottom: 19px;
+    grid-template-columns: 26px 1fr;
+    gap: 10px;
+  }
+
+  .video-app-shell .section-heading > span,
+  .image-app-shell .section-heading > span,
+  .agent-app-shell .section-heading > span {
+    color: #4d68d9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 11px;
+  }
+
+  .video-app-shell .section-heading h2,
+  .image-app-shell .section-heading h2,
+  .agent-app-shell .section-heading h2 {
+    color: #1f2025;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 17px;
+    font-weight: 720;
+    letter-spacing: -0.02em;
+  }
+
+  .video-app-shell .section-heading h2::after,
+  .image-app-shell .section-heading h2::after,
+  .agent-app-shell .section-heading h2::after {
+    width: 16px;
+    height: 2px;
+    background: #4d68d9;
+  }
+
+  .video-app-shell .section-heading p,
+  .image-app-shell .section-heading p,
+  .agent-app-shell .section-heading p {
+    color: #8a8b93;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 12px;
+  }
+
+  .video-app-shell .preview-panel,
+  .image-app-shell .preview-panel,
+  .agent-app-shell .preview-panel {
+    background: #fbfbfc;
+  }
+
+  .video-app-shell .preview-panel::before,
+  .image-app-shell .preview-panel::before,
+  .agent-app-shell .preview-panel::before {
+    height: 0;
+  }
+
+  .video-app-shell .preview-toolbar,
+  .image-app-shell .preview-toolbar,
+  .agent-app-shell .preview-toolbar {
+    min-height: 78px;
+    padding: 18px 26px;
+    border-bottom-color: #e8e8ec;
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .video-app-shell .panel-heading h2,
+  .image-app-shell .panel-heading h2,
+  .agent-app-shell .panel-heading h2 {
+    color: #202126;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+  }
+
+  .video-app-shell .task-tabs,
+  .image-app-shell .task-tabs,
+  .agent-app-shell .agent-source-tabs {
+    border: 0;
+    gap: 8px;
+  }
+
+  .video-app-shell .task-tabs button,
+  .image-app-shell .task-tabs button,
+  .agent-app-shell .agent-source-tabs button {
+    min-height: 92px;
+    border: 1px solid #e5e6eb;
+    border-radius: 12px;
+    background: #ffffff;
+  }
+
+  .video-app-shell .task-tabs button.active,
+  .image-app-shell .task-tabs button.active,
+  .agent-app-shell .agent-source-tabs button.active {
+    border-color: #9fafea;
+    background: #f2f5ff;
+    box-shadow: 0 8px 22px rgba(77, 104, 217, 0.08);
+  }
+
+  .agent-app-shell .agent-workflow-steps {
+    margin: 22px 34px 0;
+    border: 1px solid #e5e6eb;
+    border-radius: 14px;
+    background: #fbfbfc;
+  }
+
+  .agent-app-shell .agent-workflow-steps li {
+    border-color: #e6e7ec;
+  }
+
+  .agent-app-shell .agent-workflow-steps li span {
+    color: #4d68d9;
+  }
+
+  .agent-app-shell .agent-video-only-note {
+    border-color: #cfd7f8;
+    background: #f4f6ff;
+    color: #4e5f9e;
+  }
+
+  .agent-app-shell .action-row {
+    margin: 20px 28px 22px;
+    padding: 12px;
+    border: 1px solid #e4e5ea;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 12px 32px rgba(23, 25, 36, 0.1);
+  }
+
+  .agent-app-shell .primary-action,
+  .video-app-shell .primary-action,
+  .image-app-shell .primary-action {
+    border-color: #4d68d9;
+    border-radius: 10px;
+    background: #4d68d9;
+    color: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  .agent-app-shell .primary-action:hover:not(:disabled),
+  .video-app-shell .primary-action:hover:not(:disabled),
+  .image-app-shell .primary-action:hover:not(:disabled) {
+    border-color: #3d56c2;
+    background: #3d56c2;
+    color: #ffffff;
+  }
+
+  .agent-app-shell .secondary-action,
+  .video-app-shell .secondary-action,
+  .image-app-shell .secondary-action,
+  .agent-app-shell .icon-action,
+  .video-app-shell .icon-action,
+  .image-app-shell .icon-action {
+    border-color: #e1e2e8;
+    border-radius: 10px;
+    background: #ffffff;
+    color: #55565f;
+  }
+
+  .agent-app-shell .result-readout,
+  .video-app-shell .result-readout,
+  .image-app-shell .result-readout {
+    border-color: #e7e8ed;
+    background: #ffffff;
+  }
+}
+
 .agent-video-only-note svg {
   flex: 0 0 auto;
   color: var(--signal);
@@ -5297,4 +5733,265 @@ select {
   .home-app-shell .home-panel .home-section-heading {
     padding: 0 16px;
   }
+}
+
+/* 桌面创作工作台覆写：将三种创作模式统一为左侧导航和右侧画布。 */
+@media (min-width: 1181px) {
+  .video-app-shell,
+  .image-app-shell,
+  .agent-app-shell {
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: 100vh;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  .video-app-shell .topbar,
+  .image-app-shell .topbar,
+  .agent-app-shell .topbar {
+    grid-column: 1;
+    grid-row: 1;
+    height: 100vh;
+    min-height: 0;
+    padding: 30px 18px 18px;
+    border: 0;
+    border-right: 1px solid #e8e8ec;
+    background: #f7f7f8;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 28px;
+  }
+
+  .video-app-shell .brand-block,
+  .image-app-shell .brand-block,
+  .agent-app-shell .brand-block { padding: 0 10px; }
+
+  .video-app-shell .brand-block p,
+  .image-app-shell .brand-block p,
+  .agent-app-shell .brand-block p {
+    margin-bottom: 8px;
+    color: #4d68d9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 10px;
+    letter-spacing: .08em;
+  }
+
+  .video-app-shell .brand-block h1,
+  .image-app-shell .brand-block h1,
+  .agent-app-shell .brand-block h1 {
+    color: #1f2025;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 22px;
+    font-weight: 750;
+    letter-spacing: -.04em;
+  }
+
+  .video-app-shell .topbar-controls,
+  .image-app-shell .topbar-controls,
+  .agent-app-shell .topbar-controls {
+    flex: 1;
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 12px;
+  }
+
+  .video-app-shell .studio-switch,
+  .image-app-shell .studio-switch,
+  .agent-app-shell .studio-switch {
+    min-height: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    display: grid;
+    gap: 4px;
+  }
+
+  .video-app-shell .studio-switch button,
+  .image-app-shell .studio-switch button,
+  .agent-app-shell .studio-switch button {
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #70717a;
+    justify-content: flex-start;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .video-app-shell .studio-switch button:hover,
+  .image-app-shell .studio-switch button:hover,
+  .agent-app-shell .studio-switch button:hover { color: #1f2025; background: #ececf0; }
+
+  .video-app-shell .studio-switch button.active,
+  .image-app-shell .studio-switch button.active,
+  .agent-app-shell .studio-switch button.active { color: #1f2025; background: #e7e8ec; box-shadow: inset 3px 0 0 #4d68d9; }
+
+  .video-app-shell .studio-switch button svg,
+  .image-app-shell .studio-switch button svg,
+  .agent-app-shell .studio-switch button svg { color: #4d68d9; }
+
+  .video-app-shell .topbar-icon-action,
+  .image-app-shell .topbar-icon-action,
+  .agent-app-shell .topbar-icon-action {
+    order: 2;
+    width: 100%;
+    height: 40px;
+    border: 1px solid #e0e1e7;
+    border-radius: 11px;
+    background: #fff;
+    color: #60616a;
+  }
+
+  .video-app-shell .service-metrics,
+  .image-app-shell .service-metrics,
+  .agent-app-shell .service-metrics {
+    order: 3;
+    margin-top: auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 0;
+    border-top: 1px solid #e5e5ea;
+    background: transparent;
+  }
+
+  .video-app-shell .service-metrics > div,
+  .image-app-shell .service-metrics > div,
+  .agent-app-shell .service-metrics > div { min-height: 52px; padding: 9px 4px; border: 0; border-right: 1px solid #e5e5ea; }
+  .video-app-shell .service-metrics > div:last-child,
+  .image-app-shell .service-metrics > div:last-child,
+  .agent-app-shell .service-metrics > div:last-child { border-right: 0; }
+  .video-app-shell .service-metrics span,
+  .image-app-shell .service-metrics span,
+  .agent-app-shell .service-metrics span { color: #85868e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 9px; }
+  .video-app-shell .service-metrics strong,
+  .image-app-shell .service-metrics strong,
+  .agent-app-shell .service-metrics strong { color: #25262b; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 14px; }
+
+  .image-app-shell .workspace,
+  .agent-app-shell .workspace {
+    grid-column: 2;
+    grid-row: 1;
+    height: 100vh;
+    grid-template-columns: minmax(470px, .9fr) minmax(500px, 1.1fr);
+    background: #fff;
+  }
+
+  .video-app-shell { grid-template-rows: 76px minmax(0, 1fr); }
+  .video-app-shell .topbar { grid-row: 1 / -1; }
+  .video-app-shell .workflow-groups {
+    grid-column: 2;
+    grid-row: 1;
+    height: 76px;
+    padding: 14px 28px;
+    border: 0;
+    border-bottom: 1px solid #e8e8ec;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .video-app-shell .workflow-groups button {
+    width: auto;
+    height: 40px;
+    min-height: 40px;
+    padding: 0 13px;
+    border: 1px solid #e5e5ea;
+    border-radius: 10px;
+    background: #fff;
+    grid-template-columns: auto 1fr;
+    gap: 7px;
+    color: #696a72;
+  }
+  .video-app-shell .workflow-groups button strong { display: none; }
+  .video-app-shell .workflow-groups button:hover:not(:disabled) { border-color: #bfc8f3; background: #f4f6ff; }
+  .video-app-shell .workflow-groups button.active { border-color: #4d68d9; background: #eef1ff; color: #334ab0; }
+  .video-app-shell .workflow-groups button span { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 12px; }
+  .video-app-shell .workspace { grid-column: 2; grid-row: 2; height: calc(100vh - 76px); grid-template-columns: minmax(500px, .95fr) minmax(500px, 1.05fr); background: #fff; }
+
+  .video-app-shell .control-panel,
+  .image-app-shell .control-panel,
+  .agent-app-shell .control-panel { border-right-color: #e8e8ec; background: #fff; scrollbar-color: #d8d9df #fff; }
+
+  .video-app-shell .task-console,
+  .video-app-shell .model-console,
+  .video-app-shell .input-console,
+  .video-app-shell .settings-console,
+  .image-app-shell .task-console,
+  .image-app-shell .model-console,
+  .image-app-shell .input-console,
+  .image-app-shell .settings-console,
+  .agent-app-shell .task-console,
+  .agent-app-shell .model-console,
+  .agent-app-shell .input-console,
+  .agent-app-shell .settings-console { padding: 28px 34px; border-color: #ededf0; }
+
+  .video-app-shell .section-heading,
+  .image-app-shell .section-heading,
+  .agent-app-shell .section-heading { margin-bottom: 19px; grid-template-columns: 26px 1fr; gap: 10px; }
+  .video-app-shell .section-heading > span,
+  .image-app-shell .section-heading > span,
+  .agent-app-shell .section-heading > span { color: #4d68d9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 11px; }
+  .video-app-shell .section-heading h2,
+  .image-app-shell .section-heading h2,
+  .agent-app-shell .section-heading h2 { color: #1f2025; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 17px; font-weight: 720; letter-spacing: -.02em; }
+  .video-app-shell .section-heading h2::after,
+  .image-app-shell .section-heading h2::after,
+  .agent-app-shell .section-heading h2::after { width: 16px; height: 2px; background: #4d68d9; }
+  .video-app-shell .section-heading p,
+  .image-app-shell .section-heading p,
+  .agent-app-shell .section-heading p { color: #8a8b93; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 12px; }
+
+  .video-app-shell .preview-panel,
+  .image-app-shell .preview-panel,
+  .agent-app-shell .preview-panel { background: #fbfbfc; }
+  .video-app-shell .preview-panel::before,
+  .image-app-shell .preview-panel::before,
+  .agent-app-shell .preview-panel::before { height: 0; }
+  .video-app-shell .preview-toolbar,
+  .image-app-shell .preview-toolbar,
+  .agent-app-shell .preview-toolbar { min-height: 78px; padding: 18px 26px; border-bottom-color: #e8e8ec; background: rgba(255,255,255,.9); }
+  .video-app-shell .panel-heading h2,
+  .image-app-shell .panel-heading h2,
+  .agent-app-shell .panel-heading h2 { color: #202126; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 15px; }
+
+  .video-app-shell .task-tabs,
+  .image-app-shell .task-tabs,
+  .agent-app-shell .agent-source-tabs { border: 0; gap: 8px; }
+  .video-app-shell .task-tabs button,
+  .image-app-shell .task-tabs button,
+  .agent-app-shell .agent-source-tabs button { min-height: 92px; border: 1px solid #e5e6eb; border-radius: 12px; background: #fff; }
+  .video-app-shell .task-tabs button.active,
+  .image-app-shell .task-tabs button.active,
+  .agent-app-shell .agent-source-tabs button.active { border-color: #9fafea; background: #f2f5ff; box-shadow: 0 8px 22px rgba(77,104,217,.08); }
+
+  .agent-app-shell .agent-workflow-steps { margin: 22px 34px 0; border: 1px solid #e5e6eb; border-radius: 14px; background: #fbfbfc; }
+  .agent-app-shell .agent-workflow-steps li { border-color: #e6e7ec; }
+  .agent-app-shell .agent-workflow-steps li span { color: #4d68d9; }
+  .agent-app-shell .agent-video-only-note { border-color: #cfd7f8; background: #f4f6ff; color: #4e5f9e; }
+  .agent-app-shell .action-row { margin: 20px 28px 22px; padding: 12px; border: 1px solid #e4e5ea; border-radius: 16px; background: rgba(255,255,255,.96); box-shadow: 0 12px 32px rgba(23,25,36,.1); }
+
+  .video-app-shell .primary-action,
+  .image-app-shell .primary-action,
+  .agent-app-shell .primary-action { border-color: #4d68d9; border-radius: 10px; background: #4d68d9; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .video-app-shell .primary-action:hover:not(:disabled),
+  .image-app-shell .primary-action:hover:not(:disabled),
+  .agent-app-shell .primary-action:hover:not(:disabled) { border-color: #3d56c2; background: #3d56c2; color: #fff; }
+  .video-app-shell .secondary-action,
+  .image-app-shell .secondary-action,
+  .agent-app-shell .secondary-action,
+  .video-app-shell .icon-action,
+  .image-app-shell .icon-action,
+  .agent-app-shell .icon-action { border-color: #e1e2e8; border-radius: 10px; background: #fff; color: #55565f; }
+  .video-app-shell .result-readout,
+  .image-app-shell .result-readout,
+  .agent-app-shell .result-readout { border-color: #e7e8ed; background: #fff; }
 }
