@@ -6,3 +6,16 @@ vite.err.log
 .env.*
 !.env.example
 .netlify/
+.openai/*.tar.gz
+.openai/site-stage-*/
+*.log
+github-*-screen.png
+product-demo/node_modules/
+product-demo/renders/preview-*.png
+product-demo/renders/workflow-qc-*.png
+product-demo/renders/promo-snapshots/
+product-demo/renders/promo-snapshots-late/
+product-demo/renders/promo-snapshots-late2/
+remotion-fast-demo/node_modules/
+remotion-fast-demo/out/
+remotion-fast-demo/preview/
