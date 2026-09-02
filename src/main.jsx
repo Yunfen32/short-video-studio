@@ -258,6 +258,13 @@ function VideoStudio({ onOpenHome, onOpenImage, onOpenAgent, onOpenAssets, onSav
   const groupWorkflows = VIDEO_WORKFLOWS.filter((workflow) => workflow.groupId === workflowGroupId);
   const workflowModels = getModelsForWorkflow(workflowId, availableModels);
   const modelFamilies = groupModelsByFamily(workflowModels);
+  const unavailableModelFamilies = useMemo(
+    () => groupModelsByFamily(getModelsForWorkflow(
+      workflowId,
+      modelCatalog.filter((item) => (!freeOnly || isFreeVideoModel(item)) && unavailableIds.has(item.id)),
+    )),
+    [freeOnly, modelCatalog, unavailableIds, workflowId],
+  );
   const selectedModel = workflowModels.find((item) => item.id === modelId)
     || workflowModels.find((item) => item.featured)
     || workflowModels[0]
@@ -1006,6 +1013,28 @@ function VideoStudio({ onOpenHome, onOpenImage, onOpenAgent, onOpenAssets, onSav
                   </div>
                 );
               })}
+              {unavailableModelFamilies.length > 0 && (
+                <details className="quota-collapsed">
+                  <summary>额度暂不可用 <span>{unavailableModelFamilies.reduce((count, family) => count + family.variants.length, 0)} 个模型</span></summary>
+                  <div className="quota-collapsed-list">
+                    {unavailableModelFamilies.map((family) => {
+                      const model = family.variants[0];
+                      const status = unavailableModels.find((item) => item.modelId === model.id);
+                      return (
+                        <div className="model-family-row unavailable" key={family.key}>
+                          <div className="model-family-main">
+                            <span className="provider-name">{family.providerLabel} · 暂停</span>
+                            <strong>{family.familyLabel}</strong>
+                            <p>额度暂不可用，恢复后可重新选择</p>
+                            <small className="model-feature-note">{status?.reason || '服务商额度暂时耗尽'}</small>
+                          </div>
+                          <div className="variant-select"><span>状态</span><small>{family.variants.length} 个变体暂停</small></div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
               {modelFamilies.length === 0 && <p className="empty-model-state">该生成方式的模型暂不可用</p>}
             </div>
           </section>
