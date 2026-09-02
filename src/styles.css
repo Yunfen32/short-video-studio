@@ -6026,3 +6026,58 @@ select {
     border-top: 1px solid #e8e8ec;
   }
 }
+
+/* 桌面工作台允许页面自然滚动，避免固定视口高度裁切长表单。 */
+@media (min-width: 900px) {
+  .video-app-shell,
+  .image-app-shell,
+  .agent-app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    align-items: start;
+  }
+
+  .video-app-shell .topbar,
+  .image-app-shell .topbar,
+  .agent-app-shell .topbar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+
+  .video-app-shell .workspace,
+  .image-app-shell .workspace,
+  .agent-app-shell .workspace {
+    height: auto;
+    min-height: calc(100vh - 76px);
+    overflow: visible;
+    align-items: start;
+  }
+
+  .video-app-shell .control-panel,
+  .image-app-shell .control-panel,
+  .agent-app-shell .control-panel {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .video-app-shell .action-row,
+  .image-app-shell .action-row,
+  .agent-app-shell .action-row {
+    position: static;
+  }
+
+  .video-app-shell .preview-panel,
+  .image-app-shell .preview-panel,
+  .agent-app-shell .preview-panel {
+    position: sticky;
+    top: 0;
+    height: auto;
+    min-height: calc(100vh - 76px);
+  }
+}
