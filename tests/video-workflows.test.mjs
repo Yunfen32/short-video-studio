@@ -389,6 +389,7 @@ test('托管入口未配置访问变量时自动进入公开演示模式', async
 test('Netlify 入口会把 Agent 计划和生成请求交给共享后端', async () => {
   const netlify = await import('../netlify/functions/videos.mjs');
   assert.ok(netlify.config.path.includes('/api/agent/plan'));
+  assert.ok(netlify.config.path.includes('/api/agent/project-plan'));
   assert.ok(netlify.config.path.includes('/api/agent/generate'));
 });
 

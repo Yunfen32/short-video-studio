@@ -14,6 +14,9 @@ const ASSET_CATEGORIES = new Set([
   'material',
   'final',
 ]);
+const CREATIVE_TARGETS = new Set(['image', 'video']);
+const CREATIVE_STATE_STATUSES = new Set(['planned', 'ready', 'running', 'waiting_review', 'paused', 'blocked', 'complete']);
+const WORKFLOW_STEP_STATUSES = new Set(['pending', 'ready', 'active', 'completed', 'waiting_review', 'paused', 'blocked']);
 
 function createId(prefix, idFactory) {
   if (typeof idFactory === 'function') return idFactory(prefix);
@@ -31,6 +34,72 @@ function uniqueStrings(values) {
 
 function nowIso(now) {
   return new Date(now).toISOString();
+}
+
+function creativeTarget(value) {
+  return CREATIVE_TARGETS.has(value) ? value : 'video';
+}
+
+function workflowDefinition(target) {
+  const shared = [
+    { id: 'brief', label: '创作立项', detail: '已记录创作目标', status: 'completed' },
+    { id: 'assets', label: '角色与场景', detail: '已建立可编辑的角色、场景资料', status: 'ready' },
+  ];
+  if (target === 'image') {
+    return [...shared,
+      { id: 'generate', label: '生成图片', detail: '等待审核生成路径', status: 'pending' },
+      { id: 'review', label: '结果审核', detail: '等待生成结果', status: 'pending' },
+    ];
+  }
+  return [...shared,
+    { id: 'storyboard', label: '分镜规划', detail: '已创建可编辑的镜头草案', status: 'ready' },
+    { id: 'generate', label: '生成镜头', detail: '等待审核生成路径', status: 'pending' },
+    { id: 'review', label: '结果审核', detail: '等待生成结果', status: 'pending' },
+  ];
+}
+
+function createCreativeState(input = {}) {
+  const target = creativeTarget(input.target);
+  const workflow = workflowDefinition(target);
+  return {
+    version: 1,
+    target,
+    status: 'ready',
+    currentStepId: target === 'image' ? 'assets' : 'storyboard',
+    paused: false,
+    lastEvent: '项目资料已建立，等待确认下一步。',
+    workflow,
+  };
+}
+
+function normalizeWorkflowStep(step, fallback) {
+  const base = fallback || {};
+  return {
+    id: asText(step?.id, 80) || base.id,
+    label: asText(step?.label, 120) || base.label,
+    detail: asText(step?.detail, 500) || base.detail || '',
+    status: WORKFLOW_STEP_STATUSES.has(step?.status) ? step.status : (base.status || 'pending'),
+  };
+}
+
+function normalizeCreativeState(value, project) {
+  const fallback = createCreativeState({ target: value?.target || project?.creativeState?.target });
+  if (!value || typeof value !== 'object') return fallback;
+  const fallbackSteps = new Map(fallback.workflow.map((step) => [step.id, step]));
+  const supplied = Array.isArray(value.workflow) ? value.workflow : [];
+  const workflow = fallback.workflow.map((step) => {
+    const match = supplied.find((item) => item?.id === step.id);
+    return normalizeWorkflowStep(match, step);
+  });
+  return {
+    version: 1,
+    target: creativeTarget(value.target),
+    status: CREATIVE_STATE_STATUSES.has(value.status) ? value.status : fallback.status,
+    currentStepId: fallbackSteps.has(asText(value.currentStepId, 80)) ? asText(value.currentStepId, 80) : fallback.currentStepId,
+    paused: value.paused === true,
+    lastEvent: asText(value.lastEvent, 500) || fallback.lastEvent,
+    workflow,
+  };
 }
 
 function normalizeAsset(asset) {
@@ -70,6 +139,7 @@ function normalizeProject(project, assetIds) {
     ratio: asText(project.ratio, 32),
     duration: Number.isFinite(Number(project.duration)) ? Math.max(1, Number(project.duration)) : 5,
     status: ['planned', 'in_progress', 'complete'].includes(project.status) ? project.status : 'planned',
+    creativeState: normalizeCreativeState(project.creativeState, project),
     assetIds: uniqueStrings(project.assetIds).filter((id) => assetIds.has(id)),
     shotIds: uniqueStrings(project.shotIds).filter((id) => assetIds.has(id)),
     createdAt: asText(project.createdAt, 80) || new Date(0).toISOString(),
@@ -124,7 +194,7 @@ export function projectTitleFromBrief(brief, fallback = '未命名创作项目')
   return (firstPart || clean).slice(0, 28);
 }
 
-function createDocument({ id, projectId, category, title, content, tags, relatedAssetIds, createdAt }) {
+function createDocument({ id, projectId, category, title, content, tags, relatedAssetIds, createdAt, source = null }) {
   return {
     id,
     projectId,
@@ -135,7 +205,7 @@ function createDocument({ id, projectId, category, title, content, tags, related
     previewUrl: '',
     tags: uniqueStrings(tags),
     relatedAssetIds: uniqueStrings(relatedAssetIds),
-    source: null,
+    source: source && typeof source === 'object' ? source : null,
     version: 1,
     versionGroupId: `asset:${id}`,
     isCurrent: true,
@@ -144,45 +214,123 @@ function createDocument({ id, projectId, category, title, content, tags, related
   };
 }
 
+function storyboardBeat(index, total) {
+  if (total === 1) return { label: '完整镜头', detail: '在一个连贯镜头内交代主体、动作和结尾画面' };
+  if (index === 0) return { label: '建立镜头', detail: '交代主体、空间与整体氛围' };
+  if (index === total - 1) return { label: '收束镜头', detail: '突出关键结果并形成清晰结尾' };
+  if (index === 1) return { label: '主体镜头', detail: '推进到核心主体，展示最重要的视觉信息' };
+  if (index === total - 2) return { label: '转折镜头', detail: '强化动作、情绪或产品卖点，为结尾铺垫' };
+  return { label: '发展镜头', detail: '延续动作与场景关系，保持视觉和叙事连贯' };
+}
+
+export function buildStoryboardShots({ brief, duration, shotCount }) {
+  const safeBrief = asText(brief, 5000);
+  const total = Math.max(1, Number(shotCount) || 1);
+  return Array.from({ length: total }, (_, index) => {
+    const start = index * 5;
+    const remaining = Math.max(1, Number(duration) - start);
+    const seconds = Math.min(5, remaining);
+    const beat = storyboardBeat(index, total);
+    return {
+      title: `镜头 ${String(index + 1).padStart(2, '0')} · ${beat.label}`,
+      seconds,
+      content: `${seconds} 秒${beat.label}：${beat.detail}。项目目标：${safeBrief}`,
+    };
+  });
+}
+
 export function createCreativeProject(input = {}, { now = Date.now(), idFactory } = {}) {
   const brief = asText(input.brief || input.prompt);
   if (!brief) throw new Error('请先填写创作灵感或剧本');
   const createdAt = nowIso(now);
   const projectId = createId('project', idFactory);
-  const duration = durationFromBrief(brief, input.duration || 5);
-  const shotCount = Math.max(1, Math.ceil(duration / 5));
-  const title = asText(input.title, 120) || projectTitleFromBrief(brief);
-  const sharedTags = uniqueStrings([input.style, input.ratio, input.source === 'script' ? '剧本' : '灵感']);
+  const plan = input.creativePlan && typeof input.creativePlan === 'object' ? input.creativePlan : null;
+  const duration = plan?.target === 'video'
+    ? Math.max(2, Number(plan.duration) || Number(input.duration) || 5)
+    : durationFromBrief(brief, input.duration || 5);
+  const title = asText(plan?.title, 120) || asText(input.title, 120) || projectTitleFromBrief(brief);
+  const style = asText(plan?.style || input.style, 120);
+  const ratio = asText(plan?.ratio || input.ratio, 32);
+  const source = plan?.source || input.source;
+  const sharedTags = uniqueStrings([style, ratio, source === 'script' ? '剧本' : '灵感', plan ? 'LLM规划' : 'legacy']);
   const projectDocs = [
     createDocument({
       id: createId('asset', idFactory), projectId, category: 'idea', title: '创作立项', content: brief, tags: sharedTags, relatedAssetIds: [], createdAt,
     }),
     createDocument({
-      id: createId('asset', idFactory), projectId, category: 'story', title: '故事', content: brief, tags: sharedTags, relatedAssetIds: [], createdAt,
+      id: createId('asset', idFactory), projectId, category: 'story', title: '故事', content: asText(plan?.story || plan?.logline, 12000) || brief, tags: sharedTags, relatedAssetIds: [], createdAt,
     }),
     createDocument({
-      id: createId('asset', idFactory), projectId, category: 'character', title: '角色设定', content: '', tags: sharedTags, relatedAssetIds: [], createdAt,
-    }),
-    createDocument({
-      id: createId('asset', idFactory), projectId, category: 'scene', title: '场景设定', content: '', tags: sharedTags, relatedAssetIds: [], createdAt,
-    }),
-    createDocument({
-      id: createId('asset', idFactory), projectId, category: 'prompt', title: '创作提示词', content: brief, tags: sharedTags, relatedAssetIds: [], createdAt,
+      id: createId('asset', idFactory), projectId, category: 'prompt', title: '视觉方向', content: asText(plan?.creativeDirection, 12000) || brief, tags: sharedTags, relatedAssetIds: [], createdAt,
     }),
   ];
-  const shotAssets = Array.from({ length: shotCount }, (_, index) => {
-    const start = index * 5;
-    const remaining = Math.max(1, duration - start);
-    const shotDuration = Math.min(5, remaining);
+  const characters = Array.isArray(plan?.characters) ? plan.characters : [];
+  const scenes = Array.isArray(plan?.scenes) ? plan.scenes : [];
+  const planShots = Array.isArray(plan?.shots) && plan.shots.length
+    ? plan.shots
+    : buildStoryboardShots({ brief, duration, shotCount: Math.max(1, Math.ceil(duration / 5)) }).map((shot) => ({
+      id: `legacy-${shot.title}`,
+      title: shot.title,
+      duration: shot.seconds,
+      timelineDuration: shot.seconds,
+      sceneId: scenes[0]?.id || 'scene-1',
+      characterIds: [],
+      storyBeat: shot.detail,
+      visualDescription: shot.detail,
+      action: shot.detail,
+      camera: '',
+      transition: '',
+      audio: '',
+      imagePrompt: shot.content,
+      videoPrompt: shot.content,
+      legacyContent: shot.content,
+    }));
+  const characterDocs = characters.map((character, index) => createDocument({
+    id: createId('asset', idFactory), projectId, category: 'character', title: character.name || `人物 ${index + 1}`,
+    content: [character.role, character.appearance, character.wardrobe, character.personality, character.continuityNotes].filter(Boolean).join('\n'),
+    tags: [...sharedTags, '人物'], relatedAssetIds: [], createdAt,
+    source: { provider: 'llm', workflow: 'character-extraction', prompt: asText(character.imagePrompt, 5000), parameters: { characterId: character.id } },
+  }));
+  const sceneDocs = scenes.map((scene, index) => createDocument({
+    id: createId('asset', idFactory), projectId, category: 'scene', title: scene.name || `场景 ${index + 1}`,
+    content: [scene.description, `光线：${scene.lighting}`, `色彩：${scene.palette}`, scene.continuityNotes].filter(Boolean).join('\n'),
+    tags: [...sharedTags, '场景'], relatedAssetIds: [], createdAt,
+    source: { provider: 'llm', workflow: 'scene-extraction', prompt: asText(scene.imagePrompt, 5000), parameters: { sceneId: scene.id } },
+  }));
+  const shotAssets = planShots.map((shot, index) => {
+    const seconds = Math.max(1, Number(shot.duration) || 5);
+    const timelineSeconds = Math.max(1, Math.min(seconds, Number(shot.timelineDuration) || seconds));
+    const scene = scenes.find((item) => item.id === shot.sceneId);
+    const characterNames = characters.filter((item) => (shot.characterIds || []).includes(item.id)).map((item) => item.name);
+    const content = plan ? [
+      `${timelineSeconds} 秒成片 · 生成 ${seconds} 秒 · ${asText(shot.title, 160) || `镜头 ${String(index + 1).padStart(2, '0')}`}`,
+      `故事节拍：${asText(shot.storyBeat, 600)}`,
+      `画面：${asText(shot.visualDescription, 1600)}`,
+      `动作：${asText(shot.action, 1200)}`,
+      `镜头：${asText(shot.camera, 800)}`,
+      `场景：${scene?.name || shot.sceneId || '未指定'}`,
+      characterNames.length ? `人物：${characterNames.join('、')}` : '',
+      `转场：${asText(shot.transition, 500)}`,
+      `声音：${asText(shot.audio, 800)}`,
+    ].filter((line) => line && !line.endsWith('：')).join('\n') : asText(shot.legacyContent, 12000);
     return createDocument({
       id: createId('asset', idFactory),
       projectId,
       category: 'shot',
-      title: `镜头 ${String(index + 1).padStart(2, '0')}`,
-      content: `${shotDuration} 秒镜头（第 ${index + 1}/${shotCount} 镜）：${brief}`,
-      tags: [...sharedTags, '分镜', `${shotDuration}秒`],
-      relatedAssetIds: projectDocs.map((asset) => asset.id),
+      title: asText(shot.title, 160) || `镜头 ${String(index + 1).padStart(2, '0')}`,
+      content,
+      tags: [...sharedTags, '分镜', `${timelineSeconds}秒成片`, `${seconds}秒生成`],
+      relatedAssetIds: [...projectDocs, ...characterDocs, ...sceneDocs].map((asset) => asset.id),
       createdAt,
+      source: { provider: plan ? 'llm' : 'legacy', workflow: 'storyboard', prompt: asText(shot.videoPrompt || shot.imagePrompt, 5000), parameters: {
+        shotId: shot.id || `shot-${index + 1}`,
+        duration: seconds,
+        timelineDuration: timelineSeconds,
+        sceneId: shot.sceneId || '',
+        characterIds: Array.isArray(shot.characterIds) ? shot.characterIds : [],
+        imagePrompt: asText(shot.imagePrompt, 5000),
+        videoPrompt: asText(shot.videoPrompt || shot.imagePrompt, 5000),
+      } },
     });
   });
   const storyboard = createDocument({
@@ -190,20 +338,26 @@ export function createCreativeProject(input = {}, { now = Date.now(), idFactory 
     projectId,
     category: 'storyboard',
     title: '分镜脚本',
-    content: shotAssets.map((shot) => `${shot.title}\n${shot.content}`).join('\n\n'),
+    content: [
+      `# ${title}`,
+      asText(plan?.logline, 1200),
+      '',
+      ...shotAssets.map((shot) => `## ${shot.title}\n${shot.content}\n图片提示词：${shot.source?.parameters?.imagePrompt || ''}\n视频提示词：${shot.source?.parameters?.videoPrompt || ''}`),
+    ].filter(Boolean).join('\n\n'),
     tags: [...sharedTags, '分镜'],
     relatedAssetIds: shotAssets.map((asset) => asset.id),
     createdAt,
   });
-  const assets = [...projectDocs, storyboard, ...shotAssets];
+  const assets = [...projectDocs, ...characterDocs, ...sceneDocs, storyboard, ...shotAssets];
   const project = {
     id: projectId,
     title,
     brief,
-    style: asText(input.style, 120),
-    ratio: asText(input.ratio, 32),
+    style,
+    ratio,
     duration,
     status: 'planned',
+    creativeState: createCreativeState({ ...input, target: plan?.target || input.target }),
     assetIds: assets.map((asset) => asset.id),
     shotIds: shotAssets.map((asset) => asset.id),
     createdAt,
@@ -300,6 +454,22 @@ export function insertCreativeProject(library, created) {
     version: LIBRARY_VERSION,
     projects: [created.project, ...current.projects],
     assets: [...created.assets, ...current.assets],
+  };
+}
+
+export function updateCreativeProjectState(library, projectId, patch, { now = Date.now() } = {}) {
+  const current = library || createEmptyCreativeLibrary();
+  const updatedAt = nowIso(now);
+  return {
+    ...current,
+    projects: current.projects.map((project) => {
+      if (project.id !== projectId) return project;
+      const previous = normalizeCreativeState(project.creativeState, project);
+      const proposed = typeof patch === 'function' ? patch(previous) : { ...previous, ...(patch || {}) };
+      const creativeState = normalizeCreativeState(proposed, project);
+      const projectStatus = creativeState.status === 'complete' ? 'complete' : creativeState.status === 'planned' ? 'planned' : 'in_progress';
+      return { ...project, status: projectStatus, creativeState, updatedAt };
+    }),
   };
 }
 
@@ -401,6 +571,7 @@ export function deleteCreativeAsset(library, assetId) {
 export function projectProgress(project, assets) {
   const shotIds = project?.shotIds || [];
   if (!shotIds.length) return { complete: 0, total: 0 };
-  const completedShotIds = new Set((assets || []).filter((asset) => asset.type !== 'document' && asset.relatedAssetIds.some((id) => shotIds.includes(id))).flatMap((asset) => asset.relatedAssetIds));
+  const outputType = project?.creativeState?.target === 'image' ? 'image' : 'video';
+  const completedShotIds = new Set((assets || []).filter((asset) => asset.type === outputType && asset.relatedAssetIds.some((id) => shotIds.includes(id))).flatMap((asset) => asset.relatedAssetIds));
   return { complete: shotIds.filter((id) => completedShotIds.has(id)).length, total: shotIds.length };
 }

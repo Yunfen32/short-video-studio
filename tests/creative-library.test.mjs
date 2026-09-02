@@ -9,6 +9,7 @@ import {
   projectProgress,
   setCreativeAssetCurrentVersion,
   setCreativeAssetRelations,
+  updateCreativeProjectState,
 } from '../src/creative-library.mjs';
 
 function sequentialIds() {
@@ -36,7 +37,33 @@ test('30 秒项目会创建可追溯的项目文档和六个 5 秒分镜', () =>
   assert.equal(created.project.shotIds.length, 6);
   assert.equal(created.assets.filter((asset) => asset.category === 'shot').length, 6);
   assert.equal(created.assets.find((asset) => asset.category === 'storyboard').relatedAssetIds.length, 6);
-  assert.match(created.assets.find((asset) => asset.category === 'shot').content, /5 秒镜头/);
+  assert.match(created.assets.find((asset) => asset.category === 'shot').content, /5 秒建立镜头/);
+});
+
+test('LLM 创作方案会落库为人物、场景、分镜脚本和可执行提示词资产', () => {
+  const created = createCreativeProject({
+    brief: '雨夜书店短片',
+    style: '电影感',
+    ratio: '16:9',
+    target: 'video',
+    creativePlan: {
+      target: 'video', title: '雨夜纸飞机', duration: 10, style: '电影感', ratio: '16:9', source: 'script',
+      logline: '纸飞机带少女进入书店', story: '少女在雨夜追随纸飞机。', creativeDirection: '蓝紫雨夜与暖黄室内光。',
+      characters: [{ id: 'girl', name: '少女', role: '主角', appearance: '短黑发', wardrobe: '黄色雨衣', personality: '勇敢', continuityNotes: '红围巾始终出现', imagePrompt: '少女角色设定图' }],
+      scenes: [{ id: 'street', name: '雨夜街道', description: '湿润街道', lighting: '蓝紫霓虹', palette: '蓝紫暖黄', continuityNotes: '中雨', imagePrompt: '雨夜街道设定图' }],
+      shots: [{ id: 's1', title: '放飞', duration: 5, sceneId: 'street', characterIds: ['girl'], storyBeat: '引子', visualDescription: '少女放飞纸飞机', action: '纸飞机起飞', camera: '跟随', transition: '自然', audio: '雨声', imagePrompt: '少女放飞纸飞机关键帧', videoPrompt: '纸飞机穿过雨幕，镜头跟随' }, { id: 's2', title: '入店', duration: 5, sceneId: 'street', characterIds: ['girl'], storyBeat: '推进', visualDescription: '少女走向书店', action: '推门', camera: '推进', transition: '溶解', audio: '门铃', imagePrompt: '少女走到书店门口关键帧', videoPrompt: '少女推开书店门，镜头推进' }],
+    },
+  }, { idFactory: sequentialIds() });
+  const character = created.assets.find((asset) => asset.category === 'character');
+  const scene = created.assets.find((asset) => asset.category === 'scene');
+  const storyboard = created.assets.find((asset) => asset.category === 'storyboard');
+  const shot = created.assets.find((asset) => asset.category === 'shot');
+  assert.equal(created.project.title, '雨夜纸飞机');
+  assert.equal(character.source.prompt, '少女角色设定图');
+  assert.equal(scene.source.prompt, '雨夜街道设定图');
+  assert.match(storyboard.content, /图片提示词：少女放飞纸飞机关键帧/);
+  assert.equal(shot.source.parameters.videoPrompt, '纸飞机穿过雨幕，镜头跟随');
+  assert.equal(created.project.shotIds.length, 2);
 });
 
 test('生成媒体会保存模型来源并双向关联到项目镜头', () => {
@@ -118,4 +145,23 @@ test('损坏的本地资产数据会回退为空资产库', () => {
   assert.deepEqual(library.projects, []);
   assert.deepEqual(library.assets, []);
   assert.equal(storage.getItem(CREATIVE_LIBRARY_STORAGE_KEY), null);
+});
+
+test('项目会保存与创作目标匹配的工作流状态，并支持暂停后恢复', () => {
+  const created = createCreativeProject({ brief: '做一张新品海报', target: 'image' }, { idFactory: sequentialIds() });
+  assert.deepEqual(created.project.creativeState.workflow.map((step) => step.id), ['brief', 'assets', 'generate', 'review']);
+  const initial = insertCreativeProject(undefined, created);
+  const paused = updateCreativeProjectState(initial, created.project.id, (state) => ({
+    ...state,
+    status: 'paused',
+    paused: true,
+    currentStepId: 'generate',
+    lastEvent: '等待用户继续。',
+    workflow: state.workflow.map((step) => step.id === 'generate' ? { ...step, status: 'paused' } : step),
+  }), { now: 1_800_000_000_000 });
+  const project = paused.projects[0];
+  assert.equal(project.status, 'in_progress');
+  assert.equal(project.creativeState.status, 'paused');
+  assert.equal(project.creativeState.paused, true);
+  assert.equal(project.creativeState.workflow.find((step) => step.id === 'generate').status, 'paused');
 });

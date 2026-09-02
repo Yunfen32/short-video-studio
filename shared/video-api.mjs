@@ -2,6 +2,7 @@ import {
   getVideoModel,
   getWorkflowCapability,
   inferVideoWorkflow,
+  getModelsForWorkflow,
   supportsWorkflow,
   VIDEO_MODELS,
 } from "./video-models.mjs";
@@ -12,7 +13,13 @@ import {
   supportsImageWorkflow,
 } from "./image-models.mjs";
 import { isFreeImageModel, isFreeVideoModel } from "./free-models.mjs";
-import { buildCreativeAgentPlan } from "./creative-agent.mjs";
+import {
+  buildCreativeAgentPlan,
+  createProjectPlanPrompt,
+  CREATIVE_PLAN_SCHEMA,
+  creativePlanForDisplay,
+  normalizeCreativePlan,
+} from "./creative-agent.mjs";
 import {
   buildSiliconFlowImageRequest,
   buildSiliconFlowVideoRequest,
@@ -27,6 +34,7 @@ const DEFAULT_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com";
 const DEFAULT_AGNES_API_BASE = "https://apihub.agnes-ai.com";
 const DEFAULT_ZHIPU_API_BASE = "https://open.bigmodel.cn/api/paas/v4";
 const DEFAULT_SILICONFLOW_API_BASE = "https://api.siliconflow.cn/v1";
+const DEFAULT_DOTS_API_BASE = "https://api.dots.ai/v1";
 const IMAGE_QUALITY_SIZES = {
   "1K": "1024*1024",
   "2K": "2048*2048",
@@ -57,6 +65,8 @@ const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"]
 
 const RATE_LIMITS = {
   create: { limit: 6, windowMs: 60 * 60 * 1000, envKey: "VIDEO_CREATE_LIMIT_PER_HOUR" },
+  plan: { limit: 60, windowMs: 60 * 60 * 1000, envKey: "AGENT_PLAN_LIMIT_PER_HOUR" },
+  "agent-create": { limit: 60, windowMs: 60 * 60 * 1000, envKey: "AGENT_CREATE_LIMIT_PER_HOUR" },
   upload: { limit: 30, windowMs: 60 * 60 * 1000, envKey: "VIDEO_UPLOAD_LIMIT_PER_HOUR" },
   status: { limit: 360, windowMs: 60 * 60 * 1000, envKey: "VIDEO_STATUS_LIMIT_PER_HOUR" },
   download: { limit: 12, windowMs: 60 * 60 * 1000, envKey: "VIDEO_DOWNLOAD_LIMIT_PER_HOUR" },
@@ -122,6 +132,10 @@ function agnesBase(runtime) {
 
 function siliconflowBase(runtime) {
   return (runtimeEnv(runtime, "SILICONFLOW_API_BASE") || DEFAULT_SILICONFLOW_API_BASE).replace(/\/$/, "");
+}
+
+function dotsBase(runtime) {
+  return (runtimeEnv(runtime, "DOTS_API_BASE") || DEFAULT_DOTS_API_BASE).replace(/\/$/, "");
 }
 
 function agnesRoot(runtime) {
@@ -718,6 +732,193 @@ export function buildZhipuVideoRequest(model, data, imageUrls = []) {
 
 function fetchFor(runtime) {
   return runtime?.fetch || globalThis.fetch;
+}
+
+class AgentLlmConfigurationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "AgentLlmConfigurationError";
+  }
+}
+
+function agentLlmCandidates(runtime) {
+  const explicitKey = runtimeEnv(runtime, "AGENT_LLM_API_KEY");
+  if (explicitKey) {
+    return [{
+      provider: runtimeEnv(runtime, "AGENT_LLM_PROVIDER") || "openai-compatible",
+      apiKey: explicitKey,
+      baseUrl: (runtimeEnv(runtime, "AGENT_LLM_BASE_URL") || "https://api.openai.com/v1").replace(/\/$/, ""),
+      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "gpt-4o-mini",
+      wireApi: runtimeEnv(runtime, "AGENT_LLM_WIRE_API") || "responses",
+      reasoningEffort: runtimeEnv(runtime, "AGENT_LLM_REASONING_EFFORT") || "medium",
+    }];
+  }
+  const candidates = [];
+  const sub2apiKey = runtimeEnv(runtime, SUB2API_GROK.envKey);
+  if (sub2apiKey) {
+    candidates.push({
+      provider: SUB2API_GROK.provider,
+      apiKey: sub2apiKey,
+      baseUrl: sub2apiGrokBase(runtime),
+      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || SUB2API_GROK.reviewModel,
+      wireApi: "responses",
+      reasoningEffort: runtimeEnv(runtime, "AGENT_LLM_REASONING_EFFORT") || SUB2API_GROK.reasoningEffort,
+    });
+  }
+  const zhipuKey = runtimeEnv(runtime, "ZHIPU_API_KEY");
+  if (zhipuKey) {
+    candidates.push({
+      provider: ZHIPU_API_PROVIDER,
+      apiKey: zhipuKey,
+      baseUrl: zhipuBase(runtime),
+      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "glm-4.5-air",
+      wireApi: "chat_completions",
+    });
+  }
+  const dotsKey = runtimeEnv(runtime, "DOTS_API_KEY");
+  if (dotsKey) {
+    candidates.push({
+      provider: "dots",
+      apiKey: dotsKey,
+      baseUrl: dotsBase(runtime),
+      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "dots3-note-prev",
+      wireApi: "chat_completions",
+    });
+  }
+  const dashscopeKey = runtimeEnv(runtime, "DASHSCOPE_API_KEY");
+  if (dashscopeKey) {
+    candidates.push({
+      provider: "dashscope",
+      apiKey: dashscopeKey,
+      baseUrl: `${dashscopeBase(runtime)}/compatible-mode/v1`,
+      model: runtimeEnv(runtime, "AGENT_LLM_MODEL") || "qwen-plus",
+      wireApi: "chat_completions",
+    });
+  }
+  if (!candidates.length) throw new AgentLlmConfigurationError("Agent LLM 尚未配置，请设置 AGENT_LLM_API_KEY（或 SUB2API_API_KEY、ZHIPU_API_KEY、DOTS_API_KEY、DASHSCOPE_API_KEY）");
+  return candidates;
+}
+
+const AGENT_LLM_SYSTEM_PROMPT = [
+  "你是一个负责短视频前期制作的创作 Agent。你需要理解用户的灵感或剧本，做出可执行且可复核的创作方案。",
+  "先在内部完成叙事、视觉连续性、镜头节奏和生成约束的推理，但不要输出思维链；只输出符合 JSON Schema 的最终方案和一句简短 planningSummary。",
+  "必须提取主要人物和场景，每个人物与场景都要有可以直接交给文生图模型的 imagePrompt。",
+  "每个镜头必须同时提供 imagePrompt（关键画面）和 videoPrompt（动作、镜头运动、时序、转场），并沿用人物与场景的 continuityNotes 保持一致。videoPrompt 必须保留三段式换行：\n【素材引用】\n@场景图1、@角色1 等实际涉及的参考资产；\n【分段镜头】\n从 0 秒到 timelineDuration 的连续镜头、动作、台词和环境音；\n【风格画质+约束】\n风格、比例、画质、连续性和负面约束。",
+  "严格尊重用户选择的生成目标、视觉风格、画面比例和总时长，不要擅自改成另一种风格或比例。",
+  "如果目标是 video，shots 的 duration 是实际提交给视频模型的生成时长，timelineDuration 是成片保留时长；必须严格遵守用户消息中给出的拆分方案，且所有 timelineDuration 之和严格等于用户选择的总时长。",
+  "不要写无法执行的音频、字幕或后期指令；audio 只描述氛围或对白，videoPrompt 只描述视频模型可完成的画面动作。",
+].join("\n");
+
+function responseText(payload) {
+  if (typeof payload?.output_text === "string") return payload.output_text;
+  if (typeof payload?.choices?.[0]?.message?.content === "string") return payload.choices[0].message.content;
+  const output = Array.isArray(payload?.output) ? payload.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const part of content) {
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.value === "string") return part.value;
+    }
+  }
+  const messageContent = payload?.choices?.[0]?.message?.content;
+  if (Array.isArray(messageContent)) return messageContent.map((part) => part?.text || part?.value || "").join("");
+  return "";
+}
+
+function parseJsonObject(value) {
+  const source = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  try {
+    return JSON.parse(source);
+  } catch {
+    const start = source.indexOf("{");
+    const end = source.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(source.slice(start, end + 1));
+    throw new Error("LLM 返回的规划结果不是有效 JSON");
+  }
+}
+
+function preferredAgentVideoModel(candidates) {
+  return candidates.reduce((best, model) => {
+    if (!best) return model;
+    const bestMax = Math.max(...(best.durations || [0]));
+    const modelMax = Math.max(...(model.durations || [0]));
+    if (modelMax !== bestMax) return modelMax > bestMax ? model : best;
+    if (model.featured !== best.featured) return model.featured ? model : best;
+    return best;
+  }, null);
+}
+
+function agentDurationOptions(catalog, input) {
+  if (input?.target === "image") return [];
+  const requestedWorkflow = "first-frame";
+  const videoModels = catalog?.visibleVideoModels || [];
+  const referenceCandidates = getModelsForWorkflow(requestedWorkflow, videoModels);
+  const candidates = referenceCandidates.length ? referenceCandidates : getModelsForWorkflow("text-to-video", videoModels);
+  const model = preferredAgentVideoModel(candidates);
+  return (model?.durations || []).filter((duration) => Number.isInteger(duration) && duration >= 2).sort((a, b) => a - b);
+}
+
+/**
+ * 将用户的总时长映射为实际模型可生成的分段时长。
+ * 除最后一段外尽量使用模型最大值；最后一段选能覆盖剩余时间的最短合法时长，成片阶段裁掉多余尾帧。
+ */
+function projectClipTimings(totalDuration, durationOptions) {
+  const total = Math.max(1, Math.min(300, Math.round(Number(totalDuration) || 5)));
+  const options = [...new Set((durationOptions || []).map(Number).filter((duration) => Number.isInteger(duration) && duration > 0))].sort((a, b) => a - b);
+  if (!options.length) return [];
+  const maximum = options.at(-1);
+  const timings = [];
+  let remaining = total;
+  while (remaining > maximum) {
+    timings.push({ duration: maximum, timelineDuration: maximum });
+    remaining -= maximum;
+  }
+  const generatedDuration = options.find((duration) => duration >= remaining) || maximum;
+  timings.push({ duration: generatedDuration, timelineDuration: remaining });
+  return timings;
+}
+
+async function callAgentLlm(input, runtime, { durationOptions = [], clipTimings = [] } = {}) {
+  const prompt = createProjectPlanPrompt(input, {
+    maxClipDuration: durationOptions.length ? Math.max(...durationOptions) : 15,
+    durationOptions,
+    clipTimings,
+  });
+  let lastError;
+  for (const config of agentLlmCandidates(runtime)) {
+    const headers = { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" };
+    const endpoint = config.wireApi === "responses" ? `${config.baseUrl}/responses` : `${config.baseUrl}/chat/completions`;
+    const body = config.wireApi === "responses"
+      ? {
+        model: config.model,
+        instructions: AGENT_LLM_SYSTEM_PROMPT,
+        input: prompt,
+        ...(config.reasoningEffort ? { reasoning: { effort: config.reasoningEffort } } : {}),
+        text: { format: { type: "json_schema", name: "creative_project_plan", strict: true, schema: CREATIVE_PLAN_SCHEMA } },
+      }
+      : {
+        model: config.model,
+        temperature: 0.4,
+        messages: [{ role: "system", content: AGENT_LLM_SYSTEM_PROMPT }, { role: "user", content: prompt }],
+        response_format: { type: "json_schema", json_schema: { name: "creative_project_plan", strict: true, schema: CREATIVE_PLAN_SCHEMA } },
+      };
+    let response;
+    try {
+      response = await fetchFor(runtime)(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Agent LLM 网络请求失败");
+      continue;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      lastError = new Error(upstreamMessage(payload, `Agent LLM 请求失败（${response.status}）`));
+      if (![401, 403, 404, 429].includes(response.status)) throw lastError;
+      continue;
+    }
+    const raw = parseJsonObject(responseText(payload));
+    return { plan: normalizeCreativePlan(raw, { ...input, durationOptions, clipTimings }), provider: config.provider, model: config.model };
+  }
+  throw lastError || new Error("Agent LLM 请求失败");
 }
 
 async function modelCreationFailure(response, result, modelId, runtime, fallback = "视频任务创建失败") {
@@ -1382,6 +1583,7 @@ function publicAgentPlan(plan) {
     modelLabel: plan.modelLabel,
     provider: plan.provider,
     summary: plan.summary,
+    planner: plan.planner || null,
     prompt: plan.request.prompt,
     brief: plan.brief,
     output: plan.kind === "video"
@@ -1400,15 +1602,79 @@ async function resolveAgentPlan(request, runtime) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { errorResponse: json({ error: "请求内容必须是 JSON 对象" }, 400) };
   }
+  if (input.target === "image" && input.assetRole !== "intermediate") {
+    return { errorResponse: json({ error: "Agent 只输出视频；图片仅可作为视频生成的中间资产" }, 400) };
+  }
 
   try {
     const catalog = await getAvailableModelCatalog(runtime);
-    return { plan: buildCreativeAgentPlan(input, {
+    if (input.promptPrepared === true) {
+      if (input.target !== "image" && input.target !== "video") {
+        return { errorResponse: json({ error: "已准备好的镜头必须明确生成目标" }, 400) };
+      }
+      return { plan: buildCreativeAgentPlan(input, {
+        videoModels: catalog.visibleVideoModels,
+        imageModels: catalog.visibleImageModels,
+      }) };
+    }
+    const videoInput = { ...input, target: "video" };
+    const durationOptions = agentDurationOptions(catalog, videoInput);
+    const llm = await callAgentLlm(videoInput, runtime, {
+      durationOptions,
+      clipTimings: projectClipTimings(videoInput.duration, durationOptions),
+    });
+    if (llm.plan.shots.length > 1) {
+      return { errorResponse: json({ error: "该请求需要多个分镜才能完成，请先创建项目，Agent 会按镜头生成并自动拼接" }, 400) };
+    }
+    const shot = llm.plan.shots[0];
+    const target = llm.plan.target;
+    const prompt = target === "image" ? shot.imagePrompt : shot.videoPrompt;
+    const plan = buildCreativeAgentPlan({
+      ...input,
+      target,
+      prompt,
+      duration: shot.duration,
+      promptPrepared: true,
+    }, {
       videoModels: catalog.visibleVideoModels,
       imageModels: catalog.visibleImageModels,
-    }) };
+    });
+    plan.planner = { provider: llm.provider, model: llm.model, planning: "llm" };
+    return { plan };
   } catch (error) {
-    return { errorResponse: json({ error: error instanceof Error ? error.message : "Agent 暂时无法制定生成计划" }, 400) };
+    const status = error instanceof AgentLlmConfigurationError ? 503 : 400;
+    return { errorResponse: json({ error: error instanceof Error ? error.message : "Agent 暂时无法制定生成计划" }, status) };
+  }
+}
+
+async function previewAgentProjectPlan(request, runtime) {
+  let input;
+  try {
+    input = await request.json();
+  } catch {
+    return json({ error: "请求内容不是有效的 JSON" }, 400);
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return json({ error: "请求内容必须是 JSON 对象" }, 400);
+  if (input.target && input.target !== "video") return json({ error: "Agent 项目只输出视频；图片会作为中间资产自动生成" }, 400);
+  const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
+  if (!prompt) return json({ error: "请先告诉 Agent 你想创作什么" }, 400);
+  if (prompt.length > 5000) return json({ error: "创作描述不能超过 5000 个字符" }, 400);
+  try {
+    const catalog = await getAvailableModelCatalog(runtime);
+    const videoInput = { ...input, target: "video", prompt };
+    const durationOptions = agentDurationOptions(catalog, videoInput);
+    const llm = await callAgentLlm(videoInput, runtime, {
+      durationOptions,
+      clipTimings: projectClipTimings(videoInput.duration, durationOptions),
+    });
+    return json({
+      creativePlan: llm.plan,
+      display: creativePlanForDisplay(llm.plan),
+      planner: { provider: llm.provider, model: llm.model, planning: "llm" },
+    });
+  } catch (error) {
+    const status = error instanceof AgentLlmConfigurationError ? 503 : 502;
+    return json({ error: error instanceof Error ? error.message : "Agent 暂时无法完成创作规划" }, status);
   }
 }
 
@@ -1821,6 +2087,65 @@ async function downloadImage(request, runtime) {
   });
 }
 
+async function createVideoComposition(request, runtime) {
+  let input;
+  try {
+    input = await request.json();
+  } catch {
+    return json({ error: "请求内容不是有效的 JSON" }, 400);
+  }
+  const videoUrls = Array.isArray(input?.videoUrls) ? input.videoUrls.filter((value) => typeof value === "string" && value.trim()) : [];
+  const requestedDuration = Number(input?.targetDuration);
+  const targetDuration = Number.isFinite(requestedDuration) && requestedDuration > 0
+    ? Math.min(300, Math.round(requestedDuration))
+    : null;
+  if (videoUrls.length < 2) return json({ error: "至少需要两段已完成的视频才能合并" }, 400);
+  if (videoUrls.length > 24) return json({ error: "一次最多合并 24 段视频" }, 400);
+  if (videoUrls.some((url) => !allowedDownloadUrl(url))) return json({ error: "存在不受信任的视频地址，无法合并" }, 400);
+  if (typeof runtime?.composeVideos !== "function") {
+    return json({ error: "当前运行环境未配置本地视频拼接器", compositionAvailable: false }, 501);
+  }
+  if (!runtime?.storage) return json({ error: "成片存储尚未配置" }, 503);
+
+  const video = await runtime.composeVideos(videoUrls, { targetDuration });
+  const body = video instanceof Uint8Array ? video : video instanceof ArrayBuffer ? new Uint8Array(video) : null;
+  if (!body?.byteLength) return json({ error: "视频拼接器没有返回有效成片" }, 502);
+  const compositionId = crypto.randomUUID();
+  const accessToken = crypto.randomUUID();
+  const key = `compositions/${compositionId}.mp4`;
+  await runtime.storage.put(key, body, {
+    contentType: "video/mp4",
+    createdAt: runtimeNow(runtime),
+    accessToken,
+  });
+  return json({
+    compositionId,
+    status: "SUCCEEDED",
+    videoUrl: new URL(`/api/compositions/${compositionId}?token=${encodeURIComponent(accessToken)}`, request.url).href,
+    clipCount: videoUrls.length,
+    targetDuration,
+  }, 201);
+}
+
+async function getVideoComposition(compositionId, request, runtime) {
+  if (!/^[a-zA-Z0-9-]{16,80}$/.test(compositionId)) return json({ error: "成片地址无效" }, 400);
+  if (!runtime?.storage) return json({ error: "成片存储尚未配置" }, 503);
+  const video = await runtime.storage.get(`compositions/${compositionId}.mp4`);
+  if (!video?.body) return json({ error: "未找到成片" }, 404);
+  const token = new URL(request.url).searchParams.get("token") || "";
+  if (!sameSecret(token, video.accessToken || "")) {
+    const denied = authorizeRequest(request, runtime);
+    if (denied) return denied;
+  }
+  return new Response(video.body, {
+    headers: {
+      "cache-control": "private, no-store",
+      "content-disposition": 'inline; filename="agent-final-video.mp4"',
+      "content-type": video.contentType || "video/mp4",
+    },
+  });
+}
+
 export async function handleVideoApiRequest(request, runtime = {}) {
   const url = new URL(request.url);
   try {
@@ -1847,10 +2172,13 @@ export async function handleVideoApiRequest(request, runtime = {}) {
       return protectedRoute("create", () => createImage(request, runtime))();
     }
     if (url.pathname === "/api/agent/plan" && request.method === "POST") {
-      return protectedRoute("status", () => previewAgentPlan(request, runtime))();
+      return protectedRoute("plan", () => previewAgentPlan(request, runtime))();
+    }
+    if (url.pathname === "/api/agent/project-plan" && request.method === "POST") {
+      return protectedRoute("plan", () => previewAgentProjectPlan(request, runtime))();
     }
     if (url.pathname === "/api/agent/generate" && request.method === "POST") {
-      return protectedRoute("create", () => createAgentGeneration(request, runtime))();
+      return protectedRoute("agent-create", () => createAgentGeneration(request, runtime))();
     }
     if (url.pathname === "/api/video-download" && request.method === "GET") {
       return protectedRoute("download", () => downloadVideo(request, runtime))();
@@ -1858,6 +2186,11 @@ export async function handleVideoApiRequest(request, runtime = {}) {
     if (url.pathname === "/api/image-download" && request.method === "GET") {
       return protectedRoute("download", () => downloadImage(request, runtime))();
     }
+    if (url.pathname === "/api/video-compositions" && request.method === "POST") {
+      return protectedRoute("create", () => createVideoComposition(request, runtime))();
+    }
+    const compositionMatch = url.pathname.match(/^\/api\/compositions\/([a-zA-Z0-9-]+)$/);
+    if (compositionMatch && request.method === "GET") return getVideoComposition(compositionMatch[1], request, runtime);
 
     const taskMatch = url.pathname.match(/^\/api\/videos\/([a-zA-Z0-9_-]+)$/);
     if (taskMatch && request.method === "GET") {

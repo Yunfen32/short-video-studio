@@ -72,6 +72,7 @@ import {
   setCreativeAssetCurrentVersion,
   setCreativeAssetRelations,
   updateCreativeAsset,
+  updateCreativeProjectState,
 } from './creative-library.mjs';
 
 const STYLES = ['写实广告', '电影感', '产品展示', '动画短片'];
@@ -1343,6 +1344,8 @@ function App() {
     assets={library.assets}
     onCreateProject={createProject}
     onSaveAssets={saveAssets}
+    onUpdateAsset={(assetId, patch) => setLibrary((current) => updateCreativeAsset(current, assetId, patch))}
+    onUpdateProjectState={(projectId, patch) => setLibrary((current) => updateCreativeProjectState(current, projectId, patch))}
     launchDraft={agentLaunch}
     onOpenHome={() => setStudio('home')}
     onOpenVideo={() => setStudio('video')}

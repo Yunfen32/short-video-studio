@@ -23,15 +23,10 @@ const SOURCES = [
   { id: 'script', label: '剧本' },
 ];
 
-const TARGETS = [
-  { id: 'auto', label: '自动判断' },
-  { id: 'image', label: '生成图片' },
-  { id: 'video', label: '生成视频' },
-];
-
 const STYLES = ['2D 动漫', '电影感', '写实质感', '产品展示'];
 const RATIOS = ['9:16', '16:9', '1:1', '4:3', '3:4'];
-const DURATIONS = [5, 10, 15, 30];
+const PROJECT_DURATION_MIN = 1;
+const PROJECT_DURATION_MAX = 300;
 
 const PROMPT_EXAMPLES = [
   {
@@ -43,10 +38,12 @@ const PROMPT_EXAMPLES = [
     duration: 15,
   },
   {
-    label: '商品海报',
-    prompt: '把一张商品图改造成黑色背景的高对比广告海报。',
-    target: 'image',
+    label: '商品短片',
+    prompt: '制作一段黑色背景的高对比商品广告短片，镜头环绕产品并突出材质细节。',
+    target: 'video',
     style: '产品展示',
+    ratio: '9:16',
+    duration: 10,
   },
   {
     label: '连续短片',
@@ -69,7 +66,7 @@ const CREATION_ENTRANCES = [
 const WORKFLOWS = [
   { title: '视频创作', items: ['文字创作', '图片驱动', '参考一致性', '视频再创作'], icon: Clapperboard },
   { title: '图片创作', items: ['文生图', '参考图编辑'], icon: ImageIcon },
-  { title: '创作 Agent', items: ['自动判断路径', '审核生成计划', '当前镜头执行', '资产回写'], icon: Wand2 },
+  { title: '创作 Agent', items: ['视频项目规划', '中间图像资产', '视频镜头执行', '资产回写'], icon: Wand2 },
   { title: '创作资产', items: ['项目归档', '版本管理', '来源参数', '创作关系'], icon: FolderKanban },
 ];
 
@@ -87,11 +84,9 @@ function assetTypeLabel(type) {
   return { image: '图片', video: '视频', audio: '音频', document: '文档' }[type] || '资产';
 }
 
-function pathStartLabel(source, target) {
+function pathStartLabel(source) {
   const input = source === 'script' ? '剧本' : '创作描述';
-  if (target === 'image') return `${input} -> 图片计划`;
-  if (target === 'video') return `${input} -> 视频计划`;
-  return `${input} -> Agent 判断`;
+  return `${input} -> 视频项目计划`;
 }
 
 export default function HomeStudio({
@@ -103,7 +98,6 @@ export default function HomeStudio({
   onOpenAssets,
 }) {
   const [source, setSource] = useState('inspiration');
-  const [target, setTarget] = useState('auto');
   const [prompt, setPrompt] = useState('');
   const [style, setStyle] = useState('2D 动漫');
   const [ratio, setRatio] = useState('9:16');
@@ -119,8 +113,7 @@ export default function HomeStudio({
     [assets],
   );
   const canStart = Boolean(prompt.trim());
-  const visibleVideoSettings = target !== 'image';
-  const routeSteps = [pathStartLabel(source, target), '审核计划', target === 'auto' ? '图片或视频任务' : target === 'image' ? '图片任务' : '视频任务', '资产归档'];
+  const routeSteps = [pathStartLabel(source), '审核计划', '中间资产与视频任务', '视频成片归档'];
 
   async function refreshAvailability() {
     setAvailability((current) => ({ ...current, loading: true, error: '' }));
@@ -150,7 +143,7 @@ export default function HomeStudio({
     onOpenAgent({
       prompt: nextPrompt,
       source: overrides.source || source,
-      target: overrides.target || target,
+      target: 'video',
       style: overrides.style || style,
       ratio: overrides.ratio || ratio,
       duration: overrides.duration || duration,
@@ -160,7 +153,6 @@ export default function HomeStudio({
 
   function applyExample(example) {
     setPrompt(example.prompt);
-    setTarget(example.target);
     setSource(example.source || 'inspiration');
     setStyle(example.style);
     if (example.ratio) setRatio(example.ratio);
@@ -191,17 +183,14 @@ export default function HomeStudio({
       <section className="home-command-area" aria-labelledby="home-title">
         <div className="home-intro">
           <p>AI 媒体创作工作台</p>
-          <h2 id="home-title">从一个想法，开始一段创作。</h2>
-          <span>让 Agent 规划图片或视频路径，也可以进入专业工作台精细控制。</span>
+          <h2 id="home-title">今天，想创作什么？</h2>
+          <span>输入一个想法，Agent 会规划视频项目；需要更多控制时，再进入专业工作台。</span>
         </div>
 
         <section className="creation-command" aria-label="创建创作计划">
           <div className="command-toolbar">
             <div className="compact-tabs" role="tablist" aria-label="创作来源">
               {SOURCES.map((item) => <button type="button" key={item.id} className={source === item.id ? 'active' : ''} onClick={() => setSource(item.id)} role="tab" aria-selected={source === item.id}>{item.id === 'script' ? <FileText size={14} /> : <Sparkles size={14} />}{item.label}</button>)}
-            </div>
-            <div className="compact-tabs" role="tablist" aria-label="创作目标">
-              {TARGETS.map((item) => <button type="button" key={item.id} className={target === item.id ? 'active' : ''} onClick={() => setTarget(item.id)} role="tab" aria-selected={target === item.id}>{item.label}</button>)}
             </div>
           </div>
           <label className="home-prompt-field">
@@ -211,11 +200,11 @@ export default function HomeStudio({
           </label>
           <div className="command-settings">
             <label><span>视觉风格</span><select value={style} onChange={(event) => setStyle(event.target.value)}>{STYLES.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-            {visibleVideoSettings && <label><span>视频比例</span><select value={ratio} onChange={(event) => setRatio(event.target.value)}>{RATIOS.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
-            {visibleVideoSettings && <label><span>项目时长</span><select value={duration} onChange={(event) => setDuration(Number(event.target.value))}>{DURATIONS.map((item) => <option value={item} key={item}>{item} 秒</option>)}</select></label>}
+            <label><span>视频比例</span><select value={ratio} onChange={(event) => setRatio(event.target.value)}>{RATIOS.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+            <label><span>项目时长</span><input type="number" min={PROJECT_DURATION_MIN} max={PROJECT_DURATION_MAX} step="1" value={duration} onChange={(event) => setDuration(event.target.value === '' ? '' : Math.min(PROJECT_DURATION_MAX, Math.max(PROJECT_DURATION_MIN, Number(event.target.value))))} onBlur={() => setDuration((current) => Number.isFinite(Number(current)) ? Math.min(PROJECT_DURATION_MAX, Math.max(PROJECT_DURATION_MIN, Math.round(Number(current)))) : 5)} inputMode="numeric" aria-label={`项目时长，${PROJECT_DURATION_MIN} 到 ${PROJECT_DURATION_MAX} 秒`} title={`输入 ${PROJECT_DURATION_MIN}-${PROJECT_DURATION_MAX} 秒；超过单段上限会自动拆分并拼接。`} /></label>
             <div className="command-actions"><button type="button" className="primary-action" onClick={() => startAgent()} disabled={!canStart}><Wand2 size={17} />制定创作计划</button><div><button type="button" className="text-action" onClick={onOpenVideo}>视频工作台</button><button type="button" className="text-action" onClick={onOpenImage}>图片工作台</button></div></div>
           </div>
-          <p className={'command-note ' + (canStart ? 'ready' : '')}>{canStart ? '将进入 Agent 审核计划，确认后才会提交真实生成任务。' : '请先描述想创作的内容。'}</p>
+          <p className={'command-note ' + (canStart ? 'ready' : '')}>{canStart ? '将进入视频 Agent 审核计划；中间图片资产只用于生成视频，确认后才会提交真实任务。' : '请先描述想创作的视频内容。'}</p>
         </section>
 
         <div className="inspiration-list" aria-label="创作示例"><span>示例</span>{PROMPT_EXAMPLES.map((example) => <button type="button" key={example.label} onClick={() => applyExample(example)}>{example.label}<ArrowRight size={13} /></button>)}</div>
@@ -232,7 +221,7 @@ export default function HomeStudio({
           {CREATION_ENTRANCES.map((entry) => {
             const Icon = entry.icon;
             const action = entry.id === 'agent' ? () => onOpenAgent() : entry.id === 'video' ? onOpenVideo : entry.id === 'image' ? onOpenImage : onOpenAssets;
-            return <button type="button" className="creation-entrance" key={entry.id} onClick={action}><Icon size={21} /><span><strong>{entry.title}</strong><small>{entry.description}</small></span><ArrowRight size={17} /></button>;
+            return <button type="button" className={'creation-entrance ' + entry.id} key={entry.id} onClick={action}><span className="creation-entrance-visual"><Icon size={25} /></span><span><strong>{entry.title}</strong><small>{entry.description}</small></span><ArrowRight size={17} /></button>;
           })}
         </div>
       </section>
@@ -245,7 +234,7 @@ export default function HomeStudio({
             return <article className="project-resume-item" key={project.id}>
               <div><span>{projectStatusLabel(project.status)} · {formatDate(project.updatedAt)}</span><strong>{project.title}</strong><small>{project.style || '未设置风格'} · {project.ratio || '未设置比例'} · {project.duration} 秒</small></div>
               <div className="project-resume-progress"><span>{progress.complete}/{progress.total || project.shotIds.length} 镜头</span><i><b style={{ width: `${progress.total ? Math.round((progress.complete / progress.total) * 100) : 0}%` }} /></i></div>
-              <div className="project-resume-actions"><button type="button" className="secondary-action" onClick={() => onOpenAgent({ prompt: project.brief, source: 'script', target: 'auto', style: project.style || '2D 动漫', ratio: project.ratio || '9:16', duration: project.duration, projectId: project.id, detail: '已从创作首页恢复项目，可继续审核当前镜头。' })}>继续项目</button><button type="button" className="text-action" onClick={onOpenAssets}>查看资产</button></div>
+              <div className="project-resume-actions"><button type="button" className="secondary-action" onClick={() => onOpenAgent({ prompt: project.brief, source: 'script', target: 'video', style: project.style || '2D 动漫', ratio: project.ratio || '9:16', duration: project.duration, projectId: project.id, detail: '已从创作首页恢复视频项目，可继续审核当前镜头。' })}>继续项目</button><button type="button" className="text-action" onClick={onOpenAssets}>查看资产</button></div>
             </article>;
           })}</div> : <div className="home-empty-state"><FolderKanban size={28} /><strong>还没有创作项目</strong><span>从一句想法开始，Agent 会为你建立创作资料与镜头。</span><button type="button" className="secondary-action" onClick={() => document.querySelector('.home-prompt-field textarea')?.focus()}>从一句想法开始</button></div>}
         </section>
