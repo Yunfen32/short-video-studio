@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#18253c"/><stop offset="1" stop-color="#4d68d9"/></linearGradient></defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="980" cy="180" r="120" fill="#d9e1ff" opacity=".8"/>
+  <path d="M0 560 Q320 390 640 560 T1280 520 V720 H0Z" fill="#101827" opacity=".8"/>
+  <rect x="490" y="190" width="300" height="330" rx="36" fill="#f7f8ff" opacity=".95"/>
+  <circle cx="640" cy="290" r="74" fill="#f0b59b"/>
+  <path d="M560 275 Q640 185 720 275 Q690 225 640 218 Q590 225 560 275Z" fill="#1d2434"/>
+  <path d="M550 405 Q640 350 730 405 L770 540 H510Z" fill="#8ea4ff"/>
+  <text x="64" y="90" fill="#fff" font-size="44" font-family="Arial, sans-serif">DEMO STORYBOARD FRAME</text>
+</svg>
