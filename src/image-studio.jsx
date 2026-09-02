@@ -485,3 +485,4 @@ export default function ImageStudio({ onOpenHome, onOpenVideo, onOpenAgent, onOp
     </main>
   );
 }
+

@@ -21,3 +21,4 @@ export function isFreeImageModel(model) {
     || (model?.id && (FREE_IMAGE_MODEL_IDS.includes(model.id) || FREE_SILICONFLOW_IMAGE_MODEL_IDS.includes(model.id))),
   );
 }
+

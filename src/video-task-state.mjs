@@ -117,3 +117,4 @@ export function outputDurationLabel(durationMode, duration) {
   if (durationMode === 'truncate') return duration > 0 ? `截取前 ${duration} 秒` : '保留原时长';
   return `${duration} 秒`;
 }
+

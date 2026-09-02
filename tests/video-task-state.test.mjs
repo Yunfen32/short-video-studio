@@ -88,3 +88,4 @@ test('服务商停用列表按模型合并，输出时长文案保持真实语�
   assert.equal(outputDurationLabel('truncate', 4), '截取前 4 秒');
   assert.equal(outputDurationLabel('source', 5), '跟随源视频');
 });
+

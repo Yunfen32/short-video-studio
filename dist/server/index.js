@@ -79,3 +79,4 @@ export default {
     return response.status === 404 ? (fallback || response) : response;
   },
 };
+
