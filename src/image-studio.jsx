@@ -101,6 +101,10 @@ export default function ImageStudio({ onOpenHome, onOpenVideo, onOpenAgent, onOp
   );
   const workflow = getImageWorkflow(workflowId);
   const compatibleModels = availableModels.filter((model) => supportsImageWorkflow(model, workflowId));
+  const unavailableCompatibleModels = useMemo(
+    () => modelCatalog.filter((model) => (!freeOnly || isFreeImageModel(model)) && unavailableIds.has(model.id) && supportsImageWorkflow(model, workflowId)),
+    [freeOnly, modelCatalog, unavailableIds, workflowId],
+  );
   const selectedModel = compatibleModels.find((model) => model.id === modelId) || compatibleModels.find((model) => model.featured) || compatibleModels[0] || null;
   const canGenerate = Boolean(
     selectedModel
@@ -420,6 +424,22 @@ export default function ImageStudio({ onOpenHome, onOpenVideo, onOpenAgent, onOp
                   <em>{model.providerLabel} · {freeOnly ? '免费' : 'API'} · {model.variantLabel}</em>
                 </button>
               ))}
+              {unavailableCompatibleModels.length > 0 && (
+                <details className="quota-collapsed">
+                  <summary>额度暂不可用 <span>{unavailableCompatibleModels.length} 个模型</span></summary>
+                  <div className="quota-collapsed-list image-model-list">
+                    {unavailableCompatibleModels.map((model) => {
+                      const status = unavailable.find((item) => item.modelId === model.id);
+                      return (
+                        <button type="button" key={model.id} className="unavailable" disabled aria-disabled="true">
+                          <span><strong>{model.label}</strong><small>{status?.reason || '服务商额度暂时耗尽'}</small></span>
+                          <em>{model.providerLabel} · 暂停</em>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
               {!compatibleModels.length && <p className="empty-model-state">当前没有可用的图片模型，请稍后刷新模型状态。</p>}
             </div>
           </section>
