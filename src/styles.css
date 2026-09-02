@@ -5735,13 +5735,13 @@ select {
   }
 }
 
-/* 桌面创作工作台覆写：将三种创作模式统一为左侧导航和右侧画布。 */
-@media (min-width: 1181px) {
+/* 笔记本及桌面创作工作台覆写：将三种创作模式统一为左侧导航和右侧画布。 */
+@media (min-width: 900px) {
   .video-app-shell,
   .image-app-shell,
   .agent-app-shell {
     display: grid;
-    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     height: 100vh;
     overflow: hidden;
@@ -5880,7 +5880,7 @@ select {
     grid-column: 2;
     grid-row: 1;
     height: 100vh;
-    grid-template-columns: minmax(470px, .9fr) minmax(500px, 1.1fr);
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
     background: #fff;
   }
 
@@ -5915,7 +5915,7 @@ select {
   .video-app-shell .workflow-groups button:hover:not(:disabled) { border-color: #bfc8f3; background: #f4f6ff; }
   .video-app-shell .workflow-groups button.active { border-color: #4d68d9; background: #eef1ff; color: #334ab0; }
   .video-app-shell .workflow-groups button span { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 12px; }
-  .video-app-shell .workspace { grid-column: 2; grid-row: 2; height: calc(100vh - 76px); grid-template-columns: minmax(500px, .95fr) minmax(500px, 1.05fr); background: #fff; }
+  .video-app-shell .workspace { grid-column: 2; grid-row: 2; height: calc(100vh - 76px); grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); background: #fff; }
 
   .video-app-shell .control-panel,
   .image-app-shell .control-panel,
