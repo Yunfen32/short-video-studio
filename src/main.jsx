@@ -57,6 +57,7 @@ import { isFreeVideoModel } from '../shared/free-models.mjs';
 import { getVideoExample } from '../shared/video-examples.mjs';
 import { isRecoverableStudioTask, readStudioTask, saveStudioTask } from './task-session.mjs';
 import './styles.css';
+import { installDemoFetch } from './demo-fetch.mjs';
 import ImageStudio from './image-studio.jsx';
 import AgentStudio from './agent-studio.jsx';
 import AssetsStudio from './assets-studio.jsx';
@@ -74,6 +75,8 @@ import {
   updateCreativeAsset,
   updateCreativeProjectState,
 } from './creative-library.mjs';
+
+installDemoFetch();
 
 const STYLES = ['写实广告', '电影感', '产品展示', '动画短片'];
 const POLL_INTERVAL = Number(import.meta.env.VITE_POLL_INTERVAL) || 15000;
